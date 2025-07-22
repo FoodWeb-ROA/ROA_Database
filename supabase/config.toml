@@ -317,12 +317,9 @@ s3_access_key = "env(S3_ACCESS_KEY)"
 s3_secret_key = "env(S3_SECRET_KEY)"
 
 [remotes.staging]
-project_id = "wfskucyksudlnbtruema"
+project_id = "hvqrbxuwlnstphochjzj"
 
 # Production-specific configuration
 [remotes.production]
 project_id = "lpshciorecqwowfrixec"
-
-[remotes.production.db]
-pool_size = 25
 
