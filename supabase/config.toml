@@ -319,7 +319,4 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 [remotes.staging]
 project_id = "hvqrbxuwlnstphochjzj"
 
-# Production-specific configuration
-[remotes.production]
-project_id = "lpshciorecqwowfrixec"
 
