@@ -3,10 +3,18 @@
 -- This is required for environments that applied earlier versions of the
 -- schema redesign migration before the fix was added.
 
-UPDATE public.components
-SET    component_type = 'Preparation'
-WHERE  recipe_id IS NOT NULL
-  AND  component_type <> 'Preparation';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'components' AND column_name = 'recipe_id'
+    ) THEN
+        UPDATE public.components
+        SET    component_type = 'Preparation'
+        WHERE  recipe_id IS NOT NULL
+          AND  component_type <> 'Preparation';
+    END IF;
+END $$;
 
 -- Re-validate the check constraint in case it was left NOT VALID
 DO $$
