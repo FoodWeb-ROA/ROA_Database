@@ -70,8 +70,15 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='recipes' AND column_name='serving_unit_id') THEN
         ALTER TABLE public.recipes ALTER COLUMN serving_unit_id DROP NOT NULL;
     END IF;
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='recipes' AND column_name='serving_size') THEN
-        ALTER TABLE public.recipes ALTER COLUMN serving_size DROP NOT NULL;
+    -- Do NOT drop NOT NULL; we want serving_size to remain required.
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name='recipes' AND column_name='serving_size'
+    ) THEN
+        -- Ensure any nulls are set to 1, then add default & NOT NULL
+        UPDATE public.recipes SET serving_size = 1 WHERE serving_size IS NULL;
+        ALTER TABLE public.recipes ALTER COLUMN serving_size SET DEFAULT 1;
+        ALTER TABLE public.recipes ALTER COLUMN serving_size SET NOT NULL;
     END IF;
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='recipes' AND column_name='serving_item') THEN
         ALTER TABLE public.recipes ALTER COLUMN serving_item DROP NOT NULL;
@@ -124,6 +131,35 @@ BEGIN
             ADD COLUMN component_type public.component_type NOT NULL DEFAULT 'Raw_Ingredient';
     END IF;
 END $$;
+
+-- 4.3b Link preparations (components) to recipes ----------------------
+-- Add recipe_id to components; required for Preparation rows only
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'components' AND column_name = 'recipe_id'
+    ) THEN
+        ALTER TABLE public.components ADD COLUMN recipe_id uuid;
+    END IF;
+END $$;
+
+-- Backfill: for components that were preparations (component_id matches preparation_id)
+UPDATE public.components c
+SET    recipe_id = p.preparation_id
+FROM   public.preparations p
+WHERE  p.preparation_id = c.component_id
+  AND  c.recipe_id IS NULL;
+
+-- Add FK and conditional constraint
+ALTER TABLE public.components
+    ADD CONSTRAINT components_recipe_id_fk
+        FOREIGN KEY (recipe_id) REFERENCES public.recipes(recipe_id) ON DELETE CASCADE;
+
+ALTER TABLE public.components
+    ADD CONSTRAINT components_recipe_id_check
+    CHECK ( (component_type = 'Preparation' AND recipe_id IS NOT NULL) OR
+            (component_type <> 'Preparation' AND recipe_id IS NULL) );
 
 -- Sanity check – ensure recipe_id column now exists
 DO $$
@@ -200,7 +236,7 @@ ON CONFLICT DO NOTHING;
 -- 4.55 Drop deprecated serving columns ------------------------------
 -- Remove FK column and size/count columns now that data is migrated
 ALTER TABLE IF EXISTS public.recipes DROP COLUMN IF EXISTS serving_unit_id;
-ALTER TABLE IF EXISTS public.recipes DROP COLUMN IF EXISTS serving_size;
+-- KEEP serving_size column for serving metadata; do not drop
 ALTER TABLE IF EXISTS public.recipes DROP COLUMN IF EXISTS num_servings;
 
 -- 4.6 Cleanup old tables -------------------------------------------

@@ -188,10 +188,10 @@ INSERT INTO "public"."kitchen_users" ("kitchen_id", "user_id", "is_admin") VALUE
 	('b60cec46-af07-4760-973b-f60ffbbdb152', 'bd8f6c9a-a1c5-4f32-b512-d9ce889a5a69', true);
 
 --
--- Data for Name: menu_section; Type: TABLE DATA; Schema: public; Owner: postgres
+-- Data for Name: categories; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-INSERT INTO "public"."menu_section" ("menu_section_id", "name", "kitchen_id") VALUES
+INSERT INTO "public"."categories" ("category_id", "name", "kitchen_id") VALUES
 	('c57eac67-eec9-4ad3-b6a0-069b5e804812', 'prueba', 'bc493ac0-8ecd-46f2-a7bc-b5b96c323bf6'),
 	('985230c3-1027-49a8-b15a-3e3171b19412', 'Frío', 'dc9ed5aa-54c9-4df5-b9a4-959e71a39ef8'),
 	('e9248f49-a61a-4c38-a693-ee0e08fb8442', 'Food', 'ff3f850e-a473-43d9-9520-a9959be26dbd'),
@@ -210,7 +210,7 @@ INSERT INTO "public"."menu_section" ("menu_section_id", "name", "kitchen_id") VA
 -- Data for Name: recipes; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-INSERT INTO "public"."recipes" ("recipe_id", "menu_section_id", "recipe_name", "total_time", "cooking_notes", "serving_item", "directions", "kitchen_id", "created_at", "updated_at", "image_updated_at", "recipe_type", "serving_unit") VALUES
+INSERT INTO "public"."recipes" ("recipe_id", "category_id", "recipe_name", "total_time", "cooking_notes", "serving_item", "directions", "kitchen_id", "created_at", "updated_at", "image_updated_at", "recipe_type", "serving_unit") VALUES
 	('412dc85f-1d16-463e-9de1-59d1317193fe', 'f195b1a3-91c7-48b0-b5b4-63cead27976e', 'Spaghetti Pomodoro e basilico', '00:20:00', NULL, NULL, '{"Mettere l''acqua a bollire.","Schiacciare 2 spicchi di aglio.","Aggiungere 3 cucchiai di olio quando l''olio è bollente.","Aggiungere il pomodoro.","Mettere gli spaghetti nell''acqua (11 minuti).","Aggiungere il basilico nel pomodoro (tritato o intero).","Quando è lista e cotta il sugo è pronto.","Mescolare con mezzo mestolo di acqua della pasta e un po'' di burro."}', 'b6fac464-1cb7-4474-b109-917fa33d5d54', '2025-07-12 13:17:52.825793+00', '2025-07-23 17:45:45.199539+00', '2025-07-12 13:18:18.380561+00', 'Dish', 'g'),
 	('74c79adc-1130-4e88-a8e1-5900dac84be7', '41526fa4-7646-4001-8641-7d33269afac1', 'Tiramisù', '02:30:00', NULL, NULL, '{"Once ready, get a generous spoon of cream for the base of your tiramisù in a baking dish size around 30x20 cm.","Soak for few seconds the savoiardi biscuits both sides into the coffee already cold and sweetened as you prefer.","Distribute the soaked savoiardi on the top of the cream, all in the same direction and level.","Add again on the top the cream, then the savoiardi and keep going on the same till you will made the layers that you like.","Give more attention on the last layer of cream, since will be the presentation of your tiramisù.","Put on the top the bitter cocoa powder.","Put the tiramisù in the fridge for at least a couple of hours."}', '816f8fdb-fedd-4e6e-899b-9c98513e49c5', '2025-07-09 02:13:37.763633+00', '2025-07-11 15:32:24.456262+00', '2025-07-10 14:01:12.022225+00', 'Dish', 'x'),
 	('046cf913-50c9-43b8-b2d8-ff483fffa7a6', NULL, 'H. Mató', '00:30:00', NULL, NULL, '{"Preparar la mezcla según las instrucciones anteriores."}', 'dc9ed5aa-54c9-4df5-b9a4-959e71a39ef8', '2025-07-10 17:03:06.047304+00', '2025-07-10 17:05:57.680839+00', '2025-07-10 17:04:03.497378+00', 'Dish', 'x'),
