@@ -87,7 +87,7 @@ END $$;
 
 -- Backfill serving_unit from old foreign key before we drop units table
 UPDATE public.recipes r
-SET    serving_unit = lower(u.abbreviation)::public.unit
+SET    serving_unit = COALESCE(NULLIF(lower(u.abbreviation), ''), 'prep')::public.unit
 FROM   public.units u
 WHERE  r.serving_unit_id = u.unit_id;
 
@@ -151,15 +151,22 @@ FROM   public.preparations p
 WHERE  p.preparation_id = c.component_id
   AND  c.recipe_id IS NULL;
 
+-- Mark corresponding components as Preparation type
+UPDATE public.components c
+SET    component_type = 'Preparation'
+FROM   public.preparations p
+WHERE  p.preparation_id = c.component_id
+  AND  c.component_type <> 'Preparation';
+
 -- Add FK and conditional constraint
 ALTER TABLE public.components
     ADD CONSTRAINT components_recipe_id_fk
-        FOREIGN KEY (recipe_id) REFERENCES public.recipes(recipe_id) ON DELETE CASCADE;
+        FOREIGN KEY (recipe_id) REFERENCES public.recipes(recipe_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED NOT VALID;
 
 ALTER TABLE public.components
     ADD CONSTRAINT components_recipe_id_check
     CHECK ( (component_type = 'Preparation' AND recipe_id IS NOT NULL) OR
-            (component_type <> 'Preparation' AND recipe_id IS NULL) );
+            (component_type <> 'Preparation' AND recipe_id IS NULL) ) NOT VALID;
 
 -- Sanity check – ensure recipe_id column now exists
 DO $$
@@ -216,7 +223,7 @@ INSERT INTO public.recipe_components (recipe_id, component_id, amount, unit, not
 SELECT dc.dish_id,
        dc.ingredient_id,
        dc.amount,
-       lower(u.abbreviation)::public.unit,
+       COALESCE(NULLIF(lower(u.abbreviation), ''), 'prep')::public.unit,
        NULL
 FROM public.dish_components dc
 JOIN public.units u ON u.unit_id = dc.unit_id
@@ -227,7 +234,7 @@ INSERT INTO public.recipe_components (recipe_id, component_id, amount, unit, not
 SELECT pc.preparation_id,
        pc.ingredient_id,
        pc.amount,
-       lower(u.abbreviation)::public.unit,
+       COALESCE(NULLIF(lower(u.abbreviation), ''), 'prep')::public.unit,
        NULL
 FROM public.preparation_components pc
 JOIN public.units u ON u.unit_id = pc.unit_id
@@ -238,6 +245,10 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE IF EXISTS public.recipes DROP COLUMN IF EXISTS serving_unit_id;
 -- KEEP serving_size column for serving metadata; do not drop
 ALTER TABLE IF EXISTS public.recipes DROP COLUMN IF EXISTS num_servings;
+
+-- Validate FK now that data migration is complete
+ALTER TABLE public.components VALIDATE CONSTRAINT components_recipe_id_fk;
+ALTER TABLE public.components VALIDATE CONSTRAINT components_recipe_id_check;
 
 -- 4.6 Cleanup old tables -------------------------------------------
 -- Disable dependent triggers temporarily
