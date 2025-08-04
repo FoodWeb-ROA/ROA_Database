@@ -16,6 +16,22 @@ BEGIN
     END IF;
 END $$;
 
+-- Link components whose component_id equals a Preparation recipe_id
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables WHERE table_name = 'recipes'
+    ) THEN
+        UPDATE public.components c
+        SET    recipe_id     = r.recipe_id,
+               component_type = 'Preparation'
+        FROM   public.recipes r
+        WHERE  r.recipe_type = 'Preparation'
+          AND  r.recipe_id = c.component_id
+          AND  (c.recipe_id IS NULL OR c.component_type <> 'Preparation');
+    END IF;
+END $$;
+
 -- Re-validate the check constraint in case it was left NOT VALID
 DO $$
 BEGIN
