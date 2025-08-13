@@ -197,7 +197,7 @@ CREATE OR REPLACE FUNCTION "public"."count_kitchen_admins"("p_kitchen_id" "uuid"
     SET "search_path" TO 'public'
     AS $$
     SELECT COUNT(*)
-    FROM kitchen_users ku
+    FROM public.kitchen_users ku
     WHERE ku.kitchen_id = p_kitchen_id
       AND ku.is_admin = true;
 $$;
@@ -375,12 +375,12 @@ CREATE OR REPLACE FUNCTION "public"."enforce_one_user_per_personal_kitchen"() RE
 DECLARE
     kitchen_type TEXT;
 BEGIN
-    SELECT type INTO kitchen_type FROM kitchen WHERE kitchen_id = NEW.kitchen_id;
+    SELECT type INTO kitchen_type FROM public.kitchen WHERE kitchen_id = NEW.kitchen_id;
 
     IF kitchen_type = 'Personal' THEN
         -- Check if someone is already linked
         IF EXISTS (
-            SELECT 1 FROM kitchen_users
+            SELECT 1 FROM public.kitchen_users
             WHERE kitchen_id = NEW.kitchen_id
         ) THEN
             RAISE EXCEPTION 'Only one user can be linked to a Personal kitchen.';
@@ -597,7 +597,7 @@ CREATE OR REPLACE FUNCTION "public"."is_user_kitchen_admin"("p_user_id" "uuid", 
     AS $$
     SELECT EXISTS (
         SELECT 1
-        FROM kitchen_users ku
+        FROM public.kitchen_users ku
         WHERE ku.user_id = p_user_id
           AND ku.kitchen_id = p_kitchen_id
           AND ku.is_admin = true
@@ -614,7 +614,7 @@ CREATE OR REPLACE FUNCTION "public"."is_user_kitchen_member"("p_user_id" "uuid",
     AS $$
     SELECT EXISTS (
         SELECT 1
-        FROM kitchen_users ku
+        FROM public.kitchen_users ku
         WHERE ku.user_id = p_user_id
           AND ku.kitchen_id = p_kitchen_id
     );
