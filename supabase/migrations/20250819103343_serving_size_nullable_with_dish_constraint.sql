@@ -3,6 +3,7 @@
 
 BEGIN;
 
+
 -- First, make serving_size and serving_unit nullable by dropping NOT NULL constraints
 ALTER TABLE public.recipes ALTER COLUMN serving_size DROP NOT NULL;
 ALTER TABLE public.recipes ALTER COLUMN serving_unit DROP NOT NULL;
