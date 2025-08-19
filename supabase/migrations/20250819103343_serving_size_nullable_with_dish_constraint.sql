@@ -3,7 +3,10 @@
 
 BEGIN;
 
--- First, clean up existing data to comply with new constraint
+-- First, make serving_size nullable by dropping NOT NULL constraint
+ALTER TABLE public.recipes ALTER COLUMN serving_size DROP NOT NULL;
+
+-- Clean up existing data to comply with new constraint
 -- Set serving_size = NULL for all Preparation recipes
 UPDATE public.recipes 
 SET serving_size = NULL 
