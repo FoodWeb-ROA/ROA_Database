@@ -18,6 +18,8 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+
+
 --
 -- Data for Name: audit_log_entries; Type: TABLE DATA; Schema: auth; Owner: supabase_auth_admin
 --
