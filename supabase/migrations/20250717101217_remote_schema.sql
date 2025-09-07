@@ -1014,7 +1014,7 @@ CREATE TABLE IF NOT EXISTS "public"."dishes" (
     "serving_size" integer DEFAULT 1 NOT NULL,
     "cooking_notes" "text",
     "serving_unit_id" "uuid" NOT NULL,
-    "serving_item" "text" DEFAULT 'Buns'::"text",
+    "serving_item" "text" DEFAULT NULL,
     "directions" "text"[],
     "num_servings" integer,
     "kitchen_id" "uuid" NOT NULL,
