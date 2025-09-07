@@ -3408,6 +3408,12 @@ INSERT INTO "auth"."mfa_amr_claims" ("session_id", "created_at", "updated_at", "
 
 
 --
+-- Data for Name: oauth_clients; Type: TABLE DATA; Schema: auth; Owner: supabase_auth_admin
+--
+
+
+
+--
 -- Data for Name: one_time_tokens; Type: TABLE DATA; Schema: auth; Owner: supabase_auth_admin
 --
 
@@ -4157,11 +4163,42 @@ INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_a
 --
 
 
+
+--
+-- Data for Name: hooks; Type: TABLE DATA; Schema: supabase_functions; Owner: supabase_functions_admin
+--
+
+INSERT INTO "supabase_functions"."hooks" ("id", "hook_table_id", "hook_name", "created_at", "request_id") VALUES
+	(803, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 1),
+	(804, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 2),
+	(805, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 3),
+	(806, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 4),
+	(807, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 5),
+	(808, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 6),
+	(809, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 7),
+	(810, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 8),
+	(811, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 9),
+	(812, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 10),
+	(813, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 11),
+	(814, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 12),
+	(815, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 13),
+	(816, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 14),
+	(817, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 15),
+	(818, 17721, 'recipe-image-dishes', '2025-09-07 07:08:43.776625+00', 16);
+
+
 --
 -- Name: refresh_tokens_id_seq; Type: SEQUENCE SET; Schema: auth; Owner: supabase_auth_admin
 --
 
 SELECT pg_catalog.setval('"auth"."refresh_tokens_id_seq"', 1639, true);
+
+
+--
+-- Name: hooks_id_seq; Type: SEQUENCE SET; Schema: supabase_functions; Owner: supabase_functions_admin
+--
+
+SELECT pg_catalog.setval('"supabase_functions"."hooks_id_seq"', 818, true);
 
 
 --
