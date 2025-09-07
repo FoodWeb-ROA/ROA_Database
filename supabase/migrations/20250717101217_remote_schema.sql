@@ -33,6 +33,51 @@ COMMENT ON SCHEMA "public" IS 'standard public schema';
 CREATE EXTENSION IF NOT EXISTS "http" WITH SCHEMA "extensions";
 
 
+-- Compatibility shim for environments without the supabase_functions schema
+DO $$
+BEGIN
+    -- Create schema if missing
+    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'supabase_functions') THEN
+        EXECUTE 'CREATE SCHEMA supabase_functions';
+    END IF;
+
+    -- Only create stub trigger function if a real one does not already exist
+    IF to_regprocedure('supabase_functions.http_request()') IS NULL THEN
+        EXECUTE $fn$
+        CREATE OR REPLACE FUNCTION supabase_functions.http_request()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $BODY$
+        DECLARE
+            _url text := TG_ARGV[0];
+            _method text := COALESCE(TG_ARGV[1], 'POST');
+            _headers jsonb := COALESCE(TG_ARGV[2]::jsonb, '{}'::jsonb);
+            _body jsonb := COALESCE(TG_ARGV[3]::jsonb, '{}'::jsonb);
+            _timeout_ms integer := COALESCE(NULLIF(TG_ARGV[4], '')::int, 5000);
+        BEGIN
+            -- Best-effort HTTP call if pgsql-http extension is available; otherwise no-op
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'http') THEN
+                    PERFORM extensions.http_post(_url, _body::text, 'application/json');
+                END IF;
+            EXCEPTION WHEN OTHERS THEN
+                -- swallow errors to avoid blocking DML
+                NULL;
+            END;
+
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            ELSE
+                RETURN NEW;
+            END IF;
+        END;
+        $BODY$;
+        $fn$;
+    END IF;
+END;
+$$;
+
+
 
 
 
