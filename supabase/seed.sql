@@ -3630,7 +3630,7 @@ INSERT INTO "public"."categories" ("category_id", "name", "kitchen_id") VALUES
 -- Data for Name: recipes; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-INSERT INTO "public"."recipes" ("recipe_id", "category_id", "recipe_name", "total_time", "serving_size_yield", "cooking_notes", "serving_item", "directions", "kitchen_id", "image_updated_at", "recipe_type", "serving_yield_unit", "fingerprint", "fingerprint_plain") VALUES
+INSERT INTO "public"."recipes" ("recipe_id", "category_id", "recipe_name", "time", "serving_size_yield", "cooking_notes", "serving_item", "directions", "kitchen_id", "image_updated_at", "recipe_type", "serving_yield_unit", "fingerprint", "fingerprint_plain") VALUES
 	('412dc85f-1d16-463e-9de1-59d1317193fe', 'f195b1a3-91c7-48b0-b5b4-63cead27976e', 'Spaghetti Pomodoro e basilico', '00:20:00', 90, NULL, NULL, '{"Mettere l''acqua a bollire.","Schiacciare 2 spicchi di aglio.","Aggiungere 3 cucchiai di olio quando l''olio è bollente.","Aggiungere il pomodoro.","Mettere gli spaghetti nell''acqua (11 minuti).","Aggiungere il basilico nel pomodoro (tritato o intero).","Quando è lista e cotta il sugo è pronto.","Mescolare con mezzo mestolo di acqua della pasta e un po'' di burro."}', 'b6fac464-1cb7-4474-b109-917fa33d5d54', '2025-07-12 13:18:18.380561+00', 'Dish', 'g', NULL, NULL),
 	('a466ddc5-4cc3-4bb3-aea9-b60df3ee2346', NULL, 'Chocolate Tart', '00:30:00', 100, NULL, NULL, NULL, 'bdc44a77-6aaf-4039-bb52-d853fdff2364', NULL, 'Dish', 'g', NULL, NULL),
 	('046cf913-50c9-43b8-b2d8-ff483fffa7a6', NULL, 'H. Mató', '00:30:00', 1, NULL, NULL, '{"Preparar la mezcla según las instrucciones anteriores."}', 'dc9ed5aa-54c9-4df5-b9a4-959e71a39ef8', '2025-07-10 17:04:03.497378+00', 'Dish', 'x', NULL, NULL),
