@@ -33,51 +33,6 @@ COMMENT ON SCHEMA "public" IS 'standard public schema';
 CREATE EXTENSION IF NOT EXISTS "http" WITH SCHEMA "extensions";
 
 
--- Compatibility shim for environments without the supabase_functions schema
-DO $$
-BEGIN
-    -- Create schema if missing
-    IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'supabase_functions') THEN
-        EXECUTE 'CREATE SCHEMA supabase_functions';
-    END IF;
-
-    -- Only create stub trigger function if a real one does not already exist
-    IF to_regprocedure('supabase_functions.http_request()') IS NULL THEN
-        EXECUTE $fn$
-        CREATE OR REPLACE FUNCTION supabase_functions.http_request()
-        RETURNS trigger
-        LANGUAGE plpgsql
-        AS $BODY$
-        DECLARE
-            _url text := TG_ARGV[0];
-            _method text := COALESCE(TG_ARGV[1], 'POST');
-            _headers jsonb := COALESCE(TG_ARGV[2]::jsonb, '{}'::jsonb);
-            _body jsonb := COALESCE(TG_ARGV[3]::jsonb, '{}'::jsonb);
-            _timeout_ms integer := COALESCE(NULLIF(TG_ARGV[4], '')::int, 5000);
-        BEGIN
-            -- Best-effort HTTP call if pgsql-http extension is available; otherwise no-op
-            BEGIN
-                IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'http') THEN
-                    PERFORM extensions.http_post(_url, _body::text, 'application/json');
-                END IF;
-            EXCEPTION WHEN OTHERS THEN
-                -- swallow errors to avoid blocking DML
-                NULL;
-            END;
-
-            IF TG_OP = 'DELETE' THEN
-                RETURN OLD;
-            ELSE
-                RETURN NEW;
-            END IF;
-        END;
-        $BODY$;
-        $fn$;
-    END IF;
-END;
-$$;
-
-
 
 
 
@@ -118,13 +73,6 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm" WITH SCHEMA "public";
 
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA "extensions";
-
-
-
-
-
-
-CREATE EXTENSION IF NOT EXISTS "pgjwt" WITH SCHEMA "extensions";
 
 
 
@@ -242,7 +190,7 @@ CREATE OR REPLACE FUNCTION "public"."count_kitchen_admins"("p_kitchen_id" "uuid"
     SET "search_path" TO 'public'
     AS $$
     SELECT COUNT(*)
-    FROM public.kitchen_users ku
+    FROM kitchen_users ku
     WHERE ku.kitchen_id = p_kitchen_id
       AND ku.is_admin = true;
 $$;
@@ -420,12 +368,12 @@ CREATE OR REPLACE FUNCTION "public"."enforce_one_user_per_personal_kitchen"() RE
 DECLARE
     kitchen_type TEXT;
 BEGIN
-    SELECT type INTO kitchen_type FROM public.kitchen WHERE kitchen_id = NEW.kitchen_id;
+    SELECT type INTO kitchen_type FROM kitchen WHERE kitchen_id = NEW.kitchen_id;
 
     IF kitchen_type = 'Personal' THEN
         -- Check if someone is already linked
         IF EXISTS (
-            SELECT 1 FROM public.kitchen_users
+            SELECT 1 FROM kitchen_users
             WHERE kitchen_id = NEW.kitchen_id
         ) THEN
             RAISE EXCEPTION 'Only one user can be linked to a Personal kitchen.';
@@ -534,6 +482,34 @@ $$;
 ALTER FUNCTION "public"."get_components_for_preparations"("_prep_ids" "uuid"[]) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."handle_auth_user_updates"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- Update the corresponding record in public.users
+  UPDATE public.users
+  SET 
+    user_fullname = NEW.raw_user_meta_data->>'full_name',
+    user_email = NEW.email,
+    updated_at = now()
+  WHERE user_id = NEW.id;
+  
+  -- If no record exists yet (unlikely with proper setup, but as a fallback)
+  -- Insert a new record
+  IF NOT FOUND THEN
+    INSERT INTO public.users (user_id, user_fullname, user_email)
+    VALUES (NEW.id, NEW.raw_user_meta_data->>'full_name', NEW.email);
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."handle_auth_user_updates"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
@@ -581,18 +557,15 @@ ALTER FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uu
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
-    AS $$
-BEGIN
-  INSERT INTO public.users (user_id, user_email, user_fullname, user_language)
+    AS $$BEGIN
+  INSERT INTO public.users (user_id, user_email, user_fullname)
   VALUES (
     NEW.id,
     NEW.email,
-    NEW.raw_user_meta_data->>'full_name',
-    NEW.raw_user_meta_data->>'language'
+    NEW.raw_user_meta_data->>'full_name'
   );
   RETURN NEW;
-END;
-$$;
+END;$$;
 
 
 ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
@@ -642,7 +615,7 @@ CREATE OR REPLACE FUNCTION "public"."is_user_kitchen_admin"("p_user_id" "uuid", 
     AS $$
     SELECT EXISTS (
         SELECT 1
-        FROM public.kitchen_users ku
+        FROM kitchen_users ku
         WHERE ku.user_id = p_user_id
           AND ku.kitchen_id = p_kitchen_id
           AND ku.is_admin = true
@@ -659,7 +632,7 @@ CREATE OR REPLACE FUNCTION "public"."is_user_kitchen_member"("p_user_id" "uuid",
     AS $$
     SELECT EXISTS (
         SELECT 1
-        FROM public.kitchen_users ku
+        FROM kitchen_users ku
         WHERE ku.user_id = p_user_id
           AND ku.kitchen_id = p_kitchen_id
     );
@@ -1022,7 +995,6 @@ CREATE TABLE IF NOT EXISTS "public"."dishes" (
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "image_updated_at" timestamp with time zone
 );
-
 
 ALTER TABLE ONLY "public"."dishes" REPLICA IDENTITY FULL;
 
@@ -1850,7 +1822,17 @@ ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
 
 
+
+
+
+
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."dish_components";
+
+
+
 
 
 
@@ -1858,7 +1840,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."dishes";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."ingredients";
+
+
+
 
 
 
@@ -1866,7 +1854,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."kitchen";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."kitchen_users";
+
+
+
 
 
 
@@ -1874,7 +1868,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."menu_section";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."preparation_components";
+
+
+
 
 
 
@@ -1906,30 +1906,6 @@ GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "postgres";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "anon";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "service_role";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2390,6 +2366,12 @@ GRANT ALL ON FUNCTION "public"."gtrgm_union"("internal", "internal") TO "service
 
 
 
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "anon";
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "service_role";
@@ -2764,8 +2746,3 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 RESET ALL;
-
---
--- Dumped schema changes for auth and storage
---
-

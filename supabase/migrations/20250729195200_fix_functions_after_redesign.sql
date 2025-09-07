@@ -12,6 +12,88 @@ RETURNS uuid LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 -- =============================================
+-- A. Drop legacy image webhooks and create unified one for recipes
+-- =============================================
+
+-- Remove old per-table triggers if they still exist (pre-redesign)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE t.tgname = 'recipe-image-dishes'
+         AND n.nspname = 'public'
+         AND c.relname = 'dishes'
+    ) THEN
+        EXECUTE 'DROP TRIGGER IF EXISTS "recipe-image-dishes" ON public.dishes';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE t.tgname = 'recipe-image-preparations'
+         AND n.nspname = 'public'
+         AND c.relname = 'preparations'
+    ) THEN
+        EXECUTE 'DROP TRIGGER IF EXISTS "recipe-image-preparations" ON public.preparations';
+    END IF;
+END$$;
+
+-- Also drop by resolving the current attached table dynamically, in case tables were renamed
+DO $$
+DECLARE
+    _rel regclass;
+    _relname text;
+BEGIN
+    SELECT t.tgrelid::regclass
+      INTO _rel
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE t.tgname = 'recipe-image-dishes'
+       AND n.nspname = 'public'
+       AND NOT t.tgisinternal
+     LIMIT 1;
+
+    IF _rel IS NOT NULL THEN
+        _relname := _rel::text;  -- e.g. public.recipes
+        EXECUTE 'DROP TRIGGER IF EXISTS "recipe-image-dishes" ON ' || _relname;
+    END IF;
+
+    SELECT t.tgrelid::regclass
+      INTO _rel
+      FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE t.tgname = 'recipe-image-preparations'
+       AND n.nspname = 'public'
+       AND NOT t.tgisinternal
+     LIMIT 1;
+
+    IF _rel IS NOT NULL THEN
+        _relname := _rel::text;
+        EXECUTE 'DROP TRIGGER IF EXISTS "recipe-image-preparations" ON ' || _relname;
+    END IF;
+END$$;
+
+-- Create unified trigger on recipes table calling Cloud Run webhook
+-- Uses the same URL/headers as earlier triggers in 20250717101217_remote_schema.sql
+-- Note: supabase_functions.http_request is a no-op shim if extension/schema missing
+DROP TRIGGER IF EXISTS "recipe-images" ON public.recipes;
+CREATE TRIGGER "recipe-images"
+AFTER DELETE OR UPDATE ON public.recipes
+FOR EACH ROW
+EXECUTE FUNCTION supabase_functions.http_request(
+  'https://roa-api-515418725737.us-central1.run.app/webhook',
+  'POST',
+  '{"Content-type":"application/json","X-Supabase-Signature":"roa-supabase-webhook-secret"}',
+  '{}',
+  '5000'
+);
+
+-- =============================================
 -- 1. delete_dish  → now deletes recipe + components
 -- =============================================
 DROP FUNCTION IF EXISTS public.delete_dish(uuid);
