@@ -4157,42 +4157,11 @@ INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_a
 --
 
 
-
---
--- Data for Name: hooks; Type: TABLE DATA; Schema: supabase_functions; Owner: supabase_functions_admin
---
-
-INSERT INTO "supabase_functions"."hooks" ("id", "hook_table_id", "hook_name", "created_at", "request_id") VALUES
-	(803, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 1),
-	(804, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 2),
-	(805, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 3),
-	(806, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 4),
-	(807, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 5),
-	(808, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 6),
-	(809, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 7),
-	(810, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 8),
-	(811, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 9),
-	(812, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 10),
-	(813, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 11),
-	(814, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 12),
-	(815, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 13),
-	(816, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 14),
-	(817, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 15),
-	(818, 18377, 'recipe-image-dishes', '2025-09-07 06:55:37.510319+00', 16);
-
-
 --
 -- Name: refresh_tokens_id_seq; Type: SEQUENCE SET; Schema: auth; Owner: supabase_auth_admin
 --
 
 SELECT pg_catalog.setval('"auth"."refresh_tokens_id_seq"', 1639, true);
-
-
---
--- Name: hooks_id_seq; Type: SEQUENCE SET; Schema: supabase_functions; Owner: supabase_functions_admin
---
-
-SELECT pg_catalog.setval('"supabase_functions"."hooks_id_seq"', 818, true);
 
 
 --
