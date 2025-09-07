@@ -4142,6 +4142,10 @@ INSERT INTO "public"."users" ("user_id", "user_fullname", "user_email", "created
 -- Data for Name: buckets; Type: TABLE DATA; Schema: storage; Owner: supabase_storage_admin
 --
 
+INSERT INTO "storage"."buckets" ("id", "name", "owner", "created_at", "updated_at", "public", "avif_autodetection", "file_size_limit", "allowed_mime_types", "owner_id") VALUES
+	('item-images', 'item-images', NULL, '2025-05-20 03:02:58.646055+00', '2025-05-20 03:02:58.646055+00', false, false, NULL, NULL, NULL);
+
+
 --
 -- Data for Name: objects; Type: TABLE DATA; Schema: storage; Owner: supabase_storage_admin
 --
@@ -4171,6 +4175,13 @@ INSERT INTO "public"."users" ("user_id", "user_fullname", "user_email", "created
 --
 
 SELECT pg_catalog.setval('"auth"."refresh_tokens_id_seq"', 1639, true);
+
+
+--
+-- Name: hooks_id_seq; Type: SEQUENCE SET; Schema: supabase_functions; Owner: supabase_functions_admin
+--
+
+SELECT pg_catalog.setval('"supabase_functions"."hooks_id_seq"', 1, false);
 
 
 --
