@@ -1023,6 +1023,7 @@ CREATE TABLE IF NOT EXISTS "public"."dishes" (
     "image_updated_at" timestamp with time zone
 );
 
+
 ALTER TABLE ONLY "public"."dishes" REPLICA IDENTITY FULL;
 
 
