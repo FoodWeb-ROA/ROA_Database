@@ -3309,6 +3309,7 @@ INSERT INTO "auth"."identities" ("provider_id", "user_id", "identity_data", "pro
 
 
 
+
 --
 -- Data for Name: sessions; Type: TABLE DATA; Schema: auth; Owner: supabase_auth_admin
 --
