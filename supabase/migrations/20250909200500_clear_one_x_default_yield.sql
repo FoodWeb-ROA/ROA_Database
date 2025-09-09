@@ -13,3 +13,12 @@ WHERE serving_size_yield = 1
   AND serving_item IS NULL;
 
 
+-- Also clear yields when serving_item is a placeholder like 'Buns' or 'serving'
+UPDATE public.recipes
+SET serving_size_yield = NULL,
+    serving_yield_unit = NULL,
+    serving_item = NULL
+WHERE serving_item IS NOT NULL
+  AND lower(btrim(serving_item)) IN ('buns','serving');
+
+
