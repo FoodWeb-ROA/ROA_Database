@@ -51,14 +51,6 @@ BEGIN
 END;
 $$;
 
--- 2.5) Backfill defaults for existing Dish rows missing serving values
-UPDATE public.recipes
-SET
-  serving_size_yield = COALESCE(serving_size_yield, 1),
-  serving_yield_unit = COALESCE(serving_yield_unit, 'x'::public.unit)
-WHERE recipe_type = 'Dish'
-  AND (serving_size_yield IS NULL OR serving_yield_unit IS NULL);
-
 -- 2) Drop old constraints that forced NULL for preparations
 ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_size_dish_constraint;
 ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_unit_dish_constraint;
@@ -72,15 +64,6 @@ ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS recipes_serving_item_requir
 ALTER TABLE public.recipes
   ADD CONSTRAINT recipes_serving_item_requires_x
   CHECK (serving_item IS NULL OR serving_yield_unit = 'x');
-
--- 3) Add new constraints: required for Dishes, optional for Preparations
-ALTER TABLE public.recipes
-  ADD CONSTRAINT serving_size_yield_dish_required
-  CHECK ((recipe_type <> 'Dish') OR (serving_size_yield IS NOT NULL));
-
-ALTER TABLE public.recipes
-  ADD CONSTRAINT serving_yield_unit_dish_required
-  CHECK ((recipe_type <> 'Dish') OR (serving_yield_unit IS NOT NULL));
 
 COMMIT;
 
