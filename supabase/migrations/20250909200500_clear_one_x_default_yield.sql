@@ -2,6 +2,12 @@
 ALTER TABLE public.recipes ALTER COLUMN serving_size_yield DROP DEFAULT;
 ALTER TABLE public.recipes ALTER COLUMN serving_yield_unit DROP DEFAULT;
 
+-- drop legacy dish-required yield constraints if they still exist (remote safety)
+ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_size_yield_dish_required;
+ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_yield_unit_dish_required;
+ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_size_dish_constraint;
+ALTER TABLE public.recipes DROP CONSTRAINT IF EXISTS serving_unit_dish_constraint;
+
 -- Clear default yields of 1 x when no serving_item is provided
 -- We want yield fields blank (NULL) unless explicitly defined
 
