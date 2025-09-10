@@ -1,5 +1,8 @@
+-- Ensure RPC create_preparation_with_component reliably returns created IDs
+-- after adding pairing/matching constraint triggers. Use RETURN QUERY instead of RETURN NEXT.
 
--- 6) RPC: create_preparation_with_component – transactional create of recipe + component
+BEGIN;
+
 CREATE OR REPLACE FUNCTION public.create_preparation_with_component(
   _kitchen uuid,
   _name text,
@@ -27,14 +30,15 @@ BEGIN
   VALUES (COALESCE(_name, ''), 'Preparation', _kitchen, v_recipe_id)
   RETURNING components.component_id INTO v_component_id;
 
-  recipe_id := v_recipe_id;
-  component_id := v_component_id;
-  RETURN NEXT;
-  RETURN;
+  -- Explicitly return a single row to the caller
+  RETURN QUERY SELECT v_recipe_id::uuid AS recipe_id, v_component_id::uuid AS component_id;
 END;
 $$;
 
+-- Preserve hardened search_path and grants
 ALTER FUNCTION public.create_preparation_with_component(uuid, text, uuid, text[], interval, text) SET search_path TO '';
 GRANT EXECUTE ON FUNCTION public.create_preparation_with_component(uuid, text, uuid, text[], interval, text) TO authenticated;
+
+COMMIT;
 
 
