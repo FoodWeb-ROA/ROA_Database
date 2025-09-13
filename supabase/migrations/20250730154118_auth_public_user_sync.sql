@@ -26,7 +26,7 @@ END;
 $$;
 
 -- Now create the trigger on the auth.users table
-CREATE TRIGGER sync_user_data_to_public
+CREATE OR REPLACE TRIGGER sync_user_data_to_public
 AFTER UPDATE OF raw_user_meta_data, email
 ON auth.users
 FOR EACH ROW
