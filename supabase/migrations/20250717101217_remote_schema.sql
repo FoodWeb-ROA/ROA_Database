@@ -79,13 +79,6 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA "extensions";
 
 
 
-CREATE EXTENSION IF NOT EXISTS "pgjwt" WITH SCHEMA "extensions";
-
-
-
-
-
-
 CREATE EXTENSION IF NOT EXISTS "supabase_vault" WITH SCHEMA "vault";
 
 
@@ -489,6 +482,34 @@ $$;
 ALTER FUNCTION "public"."get_components_for_preparations"("_prep_ids" "uuid"[]) OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."handle_auth_user_updates"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+BEGIN
+  -- Update the corresponding record in public.users
+  UPDATE public.users
+  SET 
+    user_fullname = NEW.raw_user_meta_data->>'full_name',
+    user_email = NEW.email,
+    updated_at = now()
+  WHERE user_id = NEW.id;
+  
+  -- If no record exists yet (unlikely with proper setup, but as a fallback)
+  -- Insert a new record
+  IF NOT FOUND THEN
+    INSERT INTO public.users (user_id, user_fullname, user_email)
+    VALUES (NEW.id, NEW.raw_user_meta_data->>'full_name', NEW.email);
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."handle_auth_user_updates"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
@@ -536,18 +557,15 @@ ALTER FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uu
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
-    AS $$
-BEGIN
-  INSERT INTO public.users (user_id, user_email, user_fullname, user_language)
+    AS $$BEGIN
+  INSERT INTO public.users (user_id, user_email, user_fullname)
   VALUES (
     NEW.id,
     NEW.email,
-    NEW.raw_user_meta_data->>'full_name',
-    NEW.raw_user_meta_data->>'language'
+    NEW.raw_user_meta_data->>'full_name'
   );
   RETURN NEW;
-END;
-$$;
+END;$$;
 
 
 ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
@@ -1804,7 +1822,17 @@ ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
 
 
+
+
+
+
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."dish_components";
+
+
+
 
 
 
@@ -1812,7 +1840,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."dishes";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."ingredients";
+
+
+
 
 
 
@@ -1820,7 +1854,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."kitchen";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."kitchen_users";
+
+
+
 
 
 
@@ -1828,7 +1868,13 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."menu_section";
 
 
 
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."preparation_components";
+
+
+
 
 
 
@@ -1860,30 +1906,6 @@ GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "postgres";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "anon";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."gtrgm_out"("public"."gtrgm") TO "service_role";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2344,6 +2366,12 @@ GRANT ALL ON FUNCTION "public"."gtrgm_union"("internal", "internal") TO "service
 
 
 
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "anon";
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."handle_auth_user_updates"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."handle_ingredient_deletion_check"("p_ingredient_id" "uuid") TO "service_role";
@@ -2718,8 +2746,3 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 RESET ALL;
-
---
--- Dumped schema changes for auth and storage
---
-
