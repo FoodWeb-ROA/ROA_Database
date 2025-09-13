@@ -499,17 +499,39 @@ ALTER FUNCTION "public"."find_ingredients_by_name_fuzzy"("_names" "text"[], "_ki
 
 CREATE OR REPLACE FUNCTION "public"."find_preparations_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") RETURNS TABLE("fingerprint" "uuid", "preparation_id" "uuid")
     LANGUAGE "sql" STABLE SECURITY DEFINER
-    SET "search_path" TO ''
     AS $$
-  SELECT p.fingerprint, p.preparation_id
-    FROM public.preparations p
-    JOIN public.ingredients iprep ON iprep.ingredient_id = p.preparation_id
-   WHERE iprep.kitchen_id = _kitchen
-     AND p.fingerprint = ANY(_fps);
+  SELECT r.fingerprint,
+         c.component_id AS preparation_id
+    FROM public.recipes r
+    JOIN public.components c ON c.recipe_id = r.recipe_id AND c.recipe_id IS NOT NULL
+   WHERE r.kitchen_id = _kitchen
+     AND r.fingerprint IS NOT NULL
+     AND r.fingerprint = ANY(_fps);
 $$;
 
 
 ALTER FUNCTION "public"."find_preparations_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."find_preparations_by_plain"("_names" "text"[], "_kitchen" "uuid", "_threshold" real DEFAULT 0.75) RETURNS TABLE("fingerprint_plain" "text", "preparation_id" "uuid", "sim" numeric)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    AS $$
+  WITH q AS (
+    SELECT unnest(_names) AS plain
+  )
+  SELECT r.fingerprint_plain,
+         c.component_id AS preparation_id,
+         extensions.similarity(r.fingerprint_plain, q.plain) AS sim
+    FROM q
+    JOIN public.recipes r ON r.kitchen_id = _kitchen
+    JOIN public.components c ON c.recipe_id = r.recipe_id AND c.recipe_id IS NOT NULL
+   WHERE r.fingerprint_plain IS NOT NULL
+     AND extensions.similarity(r.fingerprint_plain, q.plain) >= _threshold
+   ORDER BY sim DESC;
+$$;
+
+
+ALTER FUNCTION "public"."find_preparations_by_plain"("_names" "text"[], "_kitchen" "uuid", "_threshold" real) OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."find_recipes_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") RETURNS TABLE("fingerprint" "uuid", "recipe_id" "uuid")
@@ -2347,6 +2369,12 @@ GRANT ALL ON FUNCTION "public"."find_ingredients_by_name_fuzzy"("_names" "text"[
 GRANT ALL ON FUNCTION "public"."find_preparations_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."find_preparations_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."find_preparations_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."find_preparations_by_plain"("_names" "text"[], "_kitchen" "uuid", "_threshold" real) TO "anon";
+GRANT ALL ON FUNCTION "public"."find_preparations_by_plain"("_names" "text"[], "_kitchen" "uuid", "_threshold" real) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."find_preparations_by_plain"("_names" "text"[], "_kitchen" "uuid", "_threshold" real) TO "service_role";
 
 
 
