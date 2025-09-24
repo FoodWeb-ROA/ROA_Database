@@ -216,11 +216,13 @@ CREATE TRIGGER trg_prep_yield_change_guard
 BEFORE UPDATE OF serving_yield_unit, serving_size_yield ON public.recipes
 FOR EACH ROW EXECUTE FUNCTION public.prep_yield_change_guard();
 
--- 4c) Add constraint: If yield unit is x, yield amount must be 1
+-- 4c) Add constraint: If yield unit is x, yield amount must be 1 (ONLY for Preparations)
 ALTER TABLE public.recipes
   ADD CONSTRAINT recipes_x_yield_is_1
   CHECK (
-    serving_yield_unit IS DISTINCT FROM 'x' OR serving_size_yield = 1
+    recipe_type IS DISTINCT FROM 'Preparation' OR
+    serving_yield_unit IS DISTINCT FROM 'x' OR 
+    serving_size_yield = 1
   );
 
 -- =============================================================================
