@@ -10,11 +10,18 @@
 DROP TRIGGER IF EXISTS enforce_unit_constraint ON public.recipe_components;
 DROP FUNCTION IF EXISTS public.check_unit_for_preparations();
 
--- 1a) Normalize prep yields: set defaults where missing
+-- 1a) Normalize prep yields: set defaults where missing AND fix existing x yields
 UPDATE public.recipes r
 SET serving_yield_unit = 'x', serving_size_yield = 1
 WHERE r.recipe_type = 'Preparation'
   AND (r.serving_yield_unit IS NULL OR r.serving_size_yield IS NULL);
+
+-- 1a.1) Fix existing rows where serving_yield_unit = 'x' but serving_size_yield != 1
+UPDATE public.recipes r
+SET serving_size_yield = 1
+WHERE r.recipe_type = 'Preparation'
+  AND r.serving_yield_unit = 'x'
+  AND r.serving_size_yield != 1;
 
 -- 1b) Transform existing recipe_components rows that used 'prep'
 WITH prep_mappings AS (
