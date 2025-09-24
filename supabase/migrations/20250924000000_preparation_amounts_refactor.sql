@@ -5,6 +5,11 @@
 -- STEP 1: Data Migration - convert 'prep' to real amounts
 -- =============================================================================
 
+-- CRITICAL: Drop the old trigger first before data migration
+-- Otherwise it will prevent us from changing 'prep' units to real units
+DROP TRIGGER IF EXISTS enforce_unit_constraint ON public.recipe_components;
+DROP FUNCTION IF EXISTS public.check_unit_for_preparations();
+
 -- 1a) Normalize prep yields: set defaults where missing
 UPDATE public.recipes r
 SET serving_yield_unit = 'x', serving_size_yield = 1
@@ -42,16 +47,14 @@ CREATE TYPE public.unit_new AS ENUM (
   'mg','g','kg','ml','l','oz','lb','tsp','tbsp','cup','pt','qt','gal','x'
 );
 
--- 2b) Drop ALL dependent triggers, functions, and constraints that reference the old enum
--- Recipe components triggers
-DROP TRIGGER IF EXISTS enforce_unit_constraint ON public.recipe_components;
+-- 2b) Drop remaining dependent triggers, functions, and constraints that reference the old enum
+-- Recipe components triggers (enforce_unit_constraint already dropped in step 1)
 DROP TRIGGER IF EXISTS trg_recipe_components_item_unit ON public.recipe_components;
 
 -- Drop constraint that might reference the enum
 ALTER TABLE public.recipe_components DROP CONSTRAINT IF EXISTS recipe_components_item_unit_guard;
 
--- Drop functions that reference the enum
-DROP FUNCTION IF EXISTS public.check_unit_for_preparations();
+-- Drop remaining functions that reference the enum (check_unit_for_preparations already dropped in step 1)
 DROP FUNCTION IF EXISTS public.recipe_components_item_unit_guard();
 DROP FUNCTION IF EXISTS public.get_components_for_recipes(uuid[]);
 
