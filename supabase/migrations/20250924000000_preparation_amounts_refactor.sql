@@ -112,7 +112,10 @@ FOR EACH ROW EXECUTE FUNCTION public.recipe_components_item_unit_guard();
 
 -- 3a) New helper: measurement type resolver (DB-side)
 CREATE OR REPLACE FUNCTION public.unit_kind(u public.unit)
-RETURNS text LANGUAGE sql IMMUTABLE AS $$
+RETURNS text 
+LANGUAGE sql IMMUTABLE 
+SET "search_path" TO ''
+AS $$
   SELECT CASE u
            WHEN 'mg' THEN 'mass' WHEN 'g' THEN 'mass' WHEN 'kg' THEN 'mass'
            WHEN 'oz' THEN 'mass' WHEN 'lb' THEN 'mass'
@@ -126,7 +129,10 @@ $$;
 
 -- 3b) New preparation component unit compatibility guard
 CREATE OR REPLACE FUNCTION public.rc_prep_unit_guard()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger 
+LANGUAGE plpgsql 
+SET "search_path" TO ''
+AS $$
 DECLARE
   child_recipe_id uuid;
   yield_unit public.unit;
@@ -170,7 +176,10 @@ END;$$;
 
 -- 3c) Guard against yield unit measurement-type changes when preparation is in use
 CREATE OR REPLACE FUNCTION public.prep_yield_change_guard()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger 
+LANGUAGE plpgsql 
+SET "search_path" TO ''
+AS $$
 DECLARE
   existing_kind text;
   new_kind text;
@@ -254,7 +263,7 @@ RETURNS TABLE(
   is_preparation boolean
 )
 LANGUAGE sql STABLE SECURITY DEFINER
-SET search_path TO 'public'
+SET "search_path" TO ''
 AS $$
   SELECT
     rc.recipe_id,
@@ -262,8 +271,8 @@ AS $$
     rc.amount,
     rc.unit AS unit,
     (c.component_type = 'Preparation') AS is_preparation
-  FROM recipe_components rc
-  JOIN components c ON c.component_id = rc.component_id
+  FROM public.recipe_components rc
+  JOIN public.components c ON c.component_id = rc.component_id
   WHERE rc.recipe_id = ANY(_recipe_ids);
 $$;
 
