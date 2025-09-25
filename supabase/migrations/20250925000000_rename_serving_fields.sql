@@ -15,6 +15,7 @@ ALTER TABLE public.recipes
   ADD CONSTRAINT recipes_serving_item_requires_x 
   CHECK ((serving_item IS NULL) OR (serving_or_yield_unit = 'x'));
 
+
 ALTER TABLE public.recipes
   ADD CONSTRAINT recipes_x_yield_is_1
   CHECK (
