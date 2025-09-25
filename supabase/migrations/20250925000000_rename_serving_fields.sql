@@ -38,7 +38,3 @@ ALTER TABLE public.recipes
 
 -- 5. Update any functions/triggers referencing the old columns (if needed, do this in follow-up migrations)
 -- (Manual review required for plpgsql functions, but most use COALESCE or reference by name)
-
--- 6. Update comments if present
-COMMENT ON COLUMN public.recipes.serving_or_yield_amount IS 'Yield or serving amount for the recipe (was serving_size_yield)';
-COMMENT ON COLUMN public.recipes.serving_or_yield_unit IS 'Yield or serving unit for the recipe (was serving_yield_unit)';
