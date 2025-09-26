@@ -11,88 +11,45 @@ EXCEPTION WHEN OTHERS THEN NULL; END $$;
 DROP TRIGGER IF EXISTS trigger_cache_invalidation_recipes ON public.recipes;
 DROP TRIGGER IF EXISTS trigger_cache_invalidation_recipe_components ON public.recipe_components;
 
--- NOTE: Enter your actual webhook URL and secret directly inside parser_db_webhook() below.
+-- Using direct supabase_functions.http_request triggers so they appear in the Webhooks UI
 
--- Generic trigger function to emit Database Webhook-compatible payload
-CREATE OR REPLACE FUNCTION public.parser_db_webhook()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  _type text;
-  _schema text := TG_TABLE_SCHEMA;
-  _table text := TG_TABLE_NAME;
-  _payload jsonb;
-  _url text := 'https://docparse-staging-515418725737.us-central1.run.app/webhooks/db';
-  _secret text := 'roa-parser-update-webhook';
-  _headers text;
-BEGIN
-  _type := TG_OP; -- 'INSERT' | 'UPDATE' | 'DELETE'
-  IF (_type = 'INSERT') THEN
-    _payload := jsonb_build_object(
-      'type', _type,
-      'table', _table,
-      'schema', _schema,
-      'record', to_jsonb(NEW),
-      'old_record', NULL
-    );
-  ELSIF (_type = 'UPDATE') THEN
-    _payload := jsonb_build_object(
-      'type', _type,
-      'table', _table,
-      'schema', _schema,
-      'record', to_jsonb(NEW),
-      'old_record', to_jsonb(OLD)
-    );
-  ELSE
-    _payload := jsonb_build_object(
-      'type', _type,
-      'table', _table,
-      'schema', _schema,
-      'record', NULL,
-      'old_record', to_jsonb(OLD)
-    );
-  END IF;
-
-  _headers := json_build_object(
-    'Content-Type', 'application/json',
-    'X-Webhook-Secret', coalesce(_secret, '')
-  )::text;
-  PERFORM supabase_functions.http_request(
-    _url,
-    'POST',
-    _headers,
-    _payload::text,
-    '5000'
-  );
-  RETURN COALESCE(NEW, OLD);
-END;
-$$;
-
--- Triggers for categories (all changes)
+-- Trigger for categories (if used globally)
 DROP TRIGGER IF EXISTS webhook_categories ON public.categories;
 CREATE TRIGGER webhook_categories
 AFTER INSERT OR UPDATE OR DELETE ON public.categories
-FOR EACH ROW EXECUTE FUNCTION public.parser_db_webhook();
+FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request(
+  'https://docparse-staging-515418725737.us-central1.run.app/webhooks/db',
+  'POST',
+  '{"Content-Type":"application/json","X-Webhook-Secret":"roa-parser-update-webhook"}',
+  '{}',
+  '5000'
+);
 
--- Triggers for recipes (Preparations only) – split to avoid NEW in DELETE
+-- Trigger for recipes (all events; app filters Preparation-only)
 DROP TRIGGER IF EXISTS webhook_recipes_insupd ON public.recipes;
-CREATE TRIGGER webhook_recipes_insupd
-AFTER INSERT OR UPDATE ON public.recipes
-FOR EACH ROW WHEN (NEW.recipe_type = 'Preparation')
-EXECUTE FUNCTION public.parser_db_webhook();
-
 DROP TRIGGER IF EXISTS webhook_recipes_del ON public.recipes;
-CREATE TRIGGER webhook_recipes_del
-AFTER DELETE ON public.recipes
-FOR EACH ROW WHEN (OLD.recipe_type = 'Preparation')
-EXECUTE FUNCTION public.parser_db_webhook();
+DROP TRIGGER IF EXISTS webhook_recipes ON public.recipes;
+CREATE TRIGGER webhook_recipes
+AFTER INSERT OR UPDATE OR DELETE ON public.recipes
+FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request(
+  'https://docparse-staging-515418725737.us-central1.run.app/webhooks/db',
+  'POST',
+  '{"Content-Type":"application/json","X-Webhook-Secret":"roa-parser-update-webhook"}',
+  '{}',
+  '5000'
+);
 
--- Triggers for recipe_components (always emit; filtering is handled in app)
+-- Trigger for recipe_components (always emit; filtering is handled in app)
 DROP TRIGGER IF EXISTS webhook_recipe_components ON public.recipe_components;
 CREATE TRIGGER webhook_recipe_components
 AFTER INSERT OR UPDATE OR DELETE ON public.recipe_components
-FOR EACH ROW EXECUTE FUNCTION public.parser_db_webhook();
+FOR EACH ROW EXECUTE FUNCTION supabase_functions.http_request(
+  'https://docparse-staging-515418725737.us-central1.run.app/webhooks/db',
+  'POST',
+  '{"Content-Type":"application/json","X-Webhook-Secret":"roa-parser-update-webhook"}',
+  '{}',
+  '5000'
+);
 
 -- Parser request queue 
 CREATE TABLE IF NOT EXISTS public.parser_request_queue (
