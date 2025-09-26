@@ -11,48 +11,7 @@ EXCEPTION WHEN OTHERS THEN NULL; END $$;
 DROP TRIGGER IF EXISTS trigger_cache_invalidation_recipes ON public.recipes;
 DROP TRIGGER IF EXISTS trigger_cache_invalidation_recipe_components ON public.recipe_components;
 
--- App config for webhook URL/secret (simple key/value)
-CREATE TABLE IF NOT EXISTS public.app_config (
-  key text PRIMARY KEY,
-  value text NOT NULL
-);
-
--- Insert placeholders if not present; update these in deployment
-INSERT INTO public.app_config(key, value)
-  VALUES
-    ('db_webhook_url', 'https://YOUR_CLOUD_RUN_URL/webhooks/db'),
-    ('db_webhook_secret', 'CHANGE_ME')
-ON CONFLICT (key) DO NOTHING;
-
--- Helper: perform HTTP webhook with dynamic headers/payload
-CREATE OR REPLACE FUNCTION public._send_parser_webhook(_payload jsonb)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  _url text;
-  _secret text;
-  _headers text;
-BEGIN
-  SELECT value INTO _url FROM public.app_config WHERE key = 'db_webhook_url' LIMIT 1;
-  SELECT value INTO _secret FROM public.app_config WHERE key = 'db_webhook_secret' LIMIT 1;
-  IF coalesce(_url, '') = '' THEN
-    RAISE NOTICE 'db_webhook_url not configured; skipping webhook';
-    RETURN;
-  END IF;
-  _headers := json_build_object(
-    'Content-Type', 'application/json',
-    'X-Webhook-Secret', coalesce(_secret, '')
-  )::text;
-  PERFORM supabase_functions.http_request(
-    _url,
-    'POST',
-    _headers,
-    _payload::text,
-    '5000'
-  );
-END;
-$$;
+-- NOTE: Enter your actual webhook URL and secret directly inside parser_db_webhook() below.
 
 -- Generic trigger function to emit Database Webhook-compatible payload
 CREATE OR REPLACE FUNCTION public.parser_db_webhook()
@@ -64,6 +23,9 @@ DECLARE
   _schema text := TG_TABLE_SCHEMA;
   _table text := TG_TABLE_NAME;
   _payload jsonb;
+  _url text := 'https://docparse-staging-515418725737.us-central1.run.app/webhooks/db';
+  _secret text := 'roa-parser-update-webhook';
+  _headers text;
 BEGIN
   _type := TG_OP; -- 'INSERT' | 'UPDATE' | 'DELETE'
   IF (_type = 'INSERT') THEN
@@ -92,22 +54,38 @@ BEGIN
     );
   END IF;
 
-  PERFORM public._send_parser_webhook(_payload);
+  _headers := json_build_object(
+    'Content-Type', 'application/json',
+    'X-Webhook-Secret', coalesce(_secret, '')
+  )::text;
+  PERFORM supabase_functions.http_request(
+    _url,
+    'POST',
+    _headers,
+    _payload::text,
+    '5000'
+  );
   RETURN COALESCE(NEW, OLD);
 END;
 $$;
 
--- Triggers for kitchen_categories (all changes)
-DROP TRIGGER IF EXISTS webhook_kitchen_categories ON public.kitchen_categories;
-CREATE TRIGGER webhook_kitchen_categories
-AFTER INSERT OR UPDATE OR DELETE ON public.kitchen_categories
+-- Triggers for categories (all changes)
+DROP TRIGGER IF EXISTS webhook_categories ON public.categories;
+CREATE TRIGGER webhook_categories
+AFTER INSERT OR UPDATE OR DELETE ON public.categories
 FOR EACH ROW EXECUTE FUNCTION public.parser_db_webhook();
 
--- Triggers for recipes (Preparations only)
-DROP TRIGGER IF EXISTS webhook_recipes ON public.recipes;
-CREATE TRIGGER webhook_recipes
-AFTER INSERT OR UPDATE OR DELETE ON public.recipes
-FOR EACH ROW WHEN (coalesce(NEW.recipe_type, OLD.recipe_type) = 'Preparation')
+-- Triggers for recipes (Preparations only) – split to avoid NEW in DELETE
+DROP TRIGGER IF EXISTS webhook_recipes_insupd ON public.recipes;
+CREATE TRIGGER webhook_recipes_insupd
+AFTER INSERT OR UPDATE ON public.recipes
+FOR EACH ROW WHEN (NEW.recipe_type = 'Preparation')
+EXECUTE FUNCTION public.parser_db_webhook();
+
+DROP TRIGGER IF EXISTS webhook_recipes_del ON public.recipes;
+CREATE TRIGGER webhook_recipes_del
+AFTER DELETE ON public.recipes
+FOR EACH ROW WHEN (OLD.recipe_type = 'Preparation')
 EXECUTE FUNCTION public.parser_db_webhook();
 
 -- Triggers for recipe_components (always emit; filtering is handled in app)
@@ -116,7 +94,7 @@ CREATE TRIGGER webhook_recipe_components
 AFTER INSERT OR UPDATE OR DELETE ON public.recipe_components
 FOR EACH ROW EXECUTE FUNCTION public.parser_db_webhook();
 
--- Parser request queue (optional usage)
+-- Parser request queue 
 CREATE TABLE IF NOT EXISTS public.parser_request_queue (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -130,13 +108,13 @@ CREATE TABLE IF NOT EXISTS public.parser_request_queue (
 
 CREATE INDEX IF NOT EXISTS idx_parser_request_queue_kitchen_status ON public.parser_request_queue(kitchen_id, status);
 
--- Optional: basic RLS (adjust as needed)
+-- RLS: only service_role can access the queue
 ALTER TABLE public.parser_request_queue ENABLE ROW LEVEL SECURITY;
-DO $$ BEGIN
-  PERFORM 1;
-  -- Allow service role by policy (example; refine for your app)
-  CREATE POLICY IF NOT EXISTS "service_read_write_queue" ON public.parser_request_queue
-    FOR ALL USING (true) WITH CHECK (true);
-EXCEPTION WHEN OTHERS THEN NULL; END $$;
+DROP POLICY IF EXISTS "service_read_write_queue" ON public.parser_request_queue;
+CREATE POLICY "service_read_write_queue" ON public.parser_request_queue
+  FOR ALL
+  TO service_role
+  USING (true)
+  WITH CHECK (true);
 
 
