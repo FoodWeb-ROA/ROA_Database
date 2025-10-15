@@ -47,7 +47,7 @@ BEGIN
             'serving_or_yield_unit', r.serving_or_yield_unit
         )
     ) INTO result
-    FROM recipes r
+    FROM public.recipes r
     LEFT JOIN LATERAL (
         SELECT jsonb_agg(
             CASE 
@@ -71,7 +71,7 @@ BEGIN
         ) AS components
         FROM recipe_components rc
         JOIN components c ON rc.component_id = c.component_id
-        LEFT JOIN recipes prep_recipe ON c.recipe_id = prep_recipe.recipe_id 
+        LEFT JOIN public.recipes prep_recipe ON c.recipe_id = prep_recipe.recipe_id 
             AND prep_recipe.recipe_type = 'Preparation'
         WHERE rc.recipe_id = r.recipe_id
     ) comp_data ON true
