@@ -46,6 +46,7 @@ BEGIN
             'serving_size_yield', r.serving_size_yield,
             'serving_or_yield_unit', r.serving_or_yield_unit
         )
+        
     ) INTO result
     FROM public.recipes r
     LEFT JOIN LATERAL (
