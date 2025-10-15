@@ -20,8 +20,8 @@ BEGIN
   -- Construct queue name (shortened to kp_ due to PGMQ 48-char limit)
   v_queue_name := CONCAT('kp_', p_kitchen_id::text);
   
-  -- Send directly to PGMQ queue
-  PERFORM pgmq.send(
+  -- Send to PGMQ queue using pgmq_public.send (exposed via Supabase dashboard)
+  PERFORM pgmq_public.send(
     v_queue_name,
     jsonb_build_object(
       'request_id', v_request_id,
@@ -36,4 +36,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-COMMENT ON FUNCTION enqueue_parse_request IS 'Enqueues a parse request to the kitchen-specific PGMQ queue. Returns request_id for tracking.';
+COMMENT ON FUNCTION enqueue_parse_request IS 'Enqueues a parse request to the kitchen-specific PGMQ queue using pgmq_public.send. Returns request_id for tracking.';
