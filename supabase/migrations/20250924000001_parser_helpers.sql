@@ -70,7 +70,7 @@ BEGIN
             END
         ) AS components
         FROM public.recipe_components rc
-        JOIN components c ON rc.component_id = c.component_id
+        JOIN public.components c ON rc.component_id = c.component_id
         LEFT JOIN public.recipes prep_recipe ON c.recipe_id = prep_recipe.recipe_id 
             AND prep_recipe.recipe_type = 'Preparation'
         WHERE rc.recipe_id = r.recipe_id
