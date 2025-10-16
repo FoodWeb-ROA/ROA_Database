@@ -42,7 +42,7 @@ BEGIN
             'components', COALESCE(comp_data.components, '[]'::jsonb),
             'directions', COALESCE(to_jsonb(r.directions), '[]'::jsonb),
             'time_minutes', EXTRACT(EPOCH FROM COALESCE(r.time, '0 minutes'::interval)) / 60,
-            'cook_notes', r.cook_notes,
+            'cook_notes', r.cooking_notes,
             'serving_size_yield', r.serving_size_yield,
             'serving_or_yield_unit', r.serving_or_yield_unit
         )
