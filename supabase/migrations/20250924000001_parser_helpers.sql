@@ -38,9 +38,9 @@ BEGIN
             'id', r.recipe_id::text,
             'recipe_name', r.recipe_name,
             'recipe_type', 'Preparation',
-            'language', 'UNK'
+            'language', 'UNK',
             'components', COALESCE(comp_data.components, '[]'::jsonb),
-            'directions', COALESCE(r.directions, '[]'::jsonb),
+            'directions', COALESCE(to_jsonb(r.directions), '[]'::jsonb),
             'time_minutes', EXTRACT(EPOCH FROM COALESCE(r.time, '0 minutes'::interval)) / 60,
             'cook_notes', r.cook_notes,
             'serving_size_yield', r.serving_size_yield,
