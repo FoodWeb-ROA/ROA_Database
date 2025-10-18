@@ -1,27 +1,47 @@
--- Migration: Fix yield unit recalculation to respect base yield units during division
--- Uses postgresql-unit extension for proper unit conversions
+-- Migration: Fix yield unit recalculation with manual unit conversion helpers
+-- Replaces postgresql-unit extension with custom conversion logic
 -- Example: If old amount is 1000g and old yield is 1kg, ratio should be 1.0, not 1000.0
 
--- Enable postgresql-unit extension for unit conversion support
-CREATE EXTENSION IF NOT EXISTS unit;
+-- Helper function to determine unit measurement type
+CREATE OR REPLACE FUNCTION get_unit_kind(unit_val public.unit)
+RETURNS TEXT AS $$
+BEGIN
+  CASE unit_val
+    WHEN 'mg', 'g', 'kg', 'oz', 'lb' THEN
+      RETURN 'mass';
+    WHEN 'ml', 'l', 'tsp', 'tbsp', 'cup', 'pt', 'qt', 'gal' THEN
+      RETURN 'volume';
+    WHEN 'x' THEN
+      RETURN 'count';
+    WHEN 'prep' THEN
+      RETURN 'preparation';
+    ELSE
+      RETURN NULL;
+  END CASE;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
--- Helper function to convert amount from one unit to another using postgresql-unit
+-- Helper function to convert amount from one unit to another
 -- Returns NULL if units are incompatible (different measurement types)
 CREATE OR REPLACE FUNCTION convert_amount_safe(
   amount_val NUMERIC,
-  from_unit TEXT,
-  to_unit TEXT
+  from_unit public.unit,
+  to_unit public.unit
 )
 RETURNS NUMERIC AS $$
 DECLARE
   from_kind TEXT;
   to_kind TEXT;
-  converted_val NUMERIC;
+  -- Conversion factors to base units (g for mass, ml for volume)
+  from_to_base NUMERIC;
+  to_to_base NUMERIC;
+  base_amount NUMERIC;
 BEGIN
-  -- Check if units are of the same measurement type
-  from_kind := public.unit_kind(from_unit);
-  to_kind := public.unit_kind(to_unit);
+  -- Get measurement types
+  from_kind := get_unit_kind(from_unit);
+  to_kind := get_unit_kind(to_unit);
   
+  -- Check if units are valid
   IF from_kind IS NULL OR to_kind IS NULL THEN
     RAISE WARNING 'Unknown unit type: % or %', from_unit, to_unit;
     RETURN NULL;
@@ -34,28 +54,92 @@ BEGIN
     RETURN NULL;
   END IF;
   
-  -- Handle count units specially (no conversion needed if same type)
-  IF from_kind = 'count' THEN
-    -- Count units don't convert, just return original amount
+  -- If same unit, no conversion needed
+  IF from_unit = to_unit THEN
     RETURN amount_val;
   END IF;
   
-  -- Try to convert using postgresql-unit extension
-  BEGIN
-    -- Format: "amount from_unit" and convert to "to_unit"
-    -- Example: "1000 g" to "kg" -> 1
-    EXECUTE format('SELECT (''%s %s''::unit @ ''%s'')::numeric', 
-                   amount_val, from_unit, to_unit)
-    INTO converted_val;
-    RETURN converted_val;
-  EXCEPTION WHEN OTHERS THEN
-    RAISE WARNING 'Unit conversion failed: % % -> %. Error: %', 
-      amount_val, from_unit, to_unit, SQLERRM;
-    -- Fallback: return original amount (no conversion)
+  -- Handle count units (no conversion)
+  IF from_kind = 'count' THEN
     RETURN amount_val;
-  END;
+  END IF;
+  
+  -- Handle preparation units (no conversion)
+  IF from_kind = 'preparation' THEN
+    RETURN amount_val;
+  END IF;
+  
+  -- Mass conversions (base unit: g)
+  IF from_kind = 'mass' THEN
+    from_to_base := CASE from_unit
+      WHEN 'mg' THEN 0.001
+      WHEN 'g' THEN 1.0
+      WHEN 'kg' THEN 1000.0
+      WHEN 'oz' THEN 28.3495
+      WHEN 'lb' THEN 453.592
+      ELSE NULL
+    END;
+    
+    to_to_base := CASE to_unit
+      WHEN 'mg' THEN 0.001
+      WHEN 'g' THEN 1.0
+      WHEN 'kg' THEN 1000.0
+      WHEN 'oz' THEN 28.3495
+      WHEN 'lb' THEN 453.592
+      ELSE NULL
+    END;
+    
+    IF from_to_base IS NULL OR to_to_base IS NULL THEN
+      RAISE WARNING 'Unsupported mass unit: % or %', from_unit, to_unit;
+      RETURN amount_val;
+    END IF;
+    
+    -- Convert: amount * from_factor / to_factor
+    base_amount := amount_val * from_to_base;
+    RETURN ROUND(base_amount / to_to_base, 4);
+  END IF;
+  
+  -- Volume conversions (base unit: ml)
+  IF from_kind = 'volume' THEN
+    from_to_base := CASE from_unit
+      WHEN 'ml' THEN 1.0
+      WHEN 'l' THEN 1000.0
+      WHEN 'tsp' THEN 4.92892
+      WHEN 'tbsp' THEN 14.7868
+      WHEN 'cup' THEN 236.588
+      WHEN 'pt' THEN 473.176
+      WHEN 'qt' THEN 946.353
+      WHEN 'gal' THEN 3785.41
+      ELSE NULL
+    END;
+    
+    to_to_base := CASE to_unit
+      WHEN 'ml' THEN 1.0
+      WHEN 'l' THEN 1000.0
+      WHEN 'tsp' THEN 4.92892
+      WHEN 'tbsp' THEN 14.7868
+      WHEN 'cup' THEN 236.588
+      WHEN 'pt' THEN 473.176
+      WHEN 'qt' THEN 946.353
+      WHEN 'gal' THEN 3785.41
+      ELSE NULL
+    END;
+    
+    IF from_to_base IS NULL OR to_to_base IS NULL THEN
+      RAISE WARNING 'Unsupported volume unit: % or %', from_unit, to_unit;
+      RETURN amount_val;
+    END IF;
+    
+    -- Convert: amount * from_factor / to_factor
+    base_amount := amount_val * from_to_base;
+    RETURN ROUND(base_amount / to_to_base, 4);
+  END IF;
+  
+  -- Fallback: return original amount
+  RAISE WARNING 'Unit conversion not implemented for kind: %', from_kind;
+  RETURN amount_val;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
 -- Updated function to recalculate parent amounts with proper unit conversion
 CREATE OR REPLACE FUNCTION recalculate_parent_amounts_on_yield_change()
@@ -83,8 +167,8 @@ BEGIN
   END IF;
 
   -- Get measurement types for old and new units
-  old_measurement_type := public.unit_kind(OLD.serving_yield_unit);
-  new_measurement_type := public.unit_kind(NEW.serving_yield_unit);
+  old_measurement_type := get_unit_kind(OLD.serving_yield_unit);
+  new_measurement_type := get_unit_kind(NEW.serving_yield_unit);
 
   -- Only recalculate if measurement types differ (weight vs volume vs count)
   IF old_measurement_type IS NULL OR new_measurement_type IS NULL THEN
@@ -180,13 +264,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Add comment explaining the fix
+-- Add comments explaining the functions
+COMMENT ON FUNCTION get_unit_kind(public.unit) IS
+  'Returns the measurement type (mass, volume, count, preparation) for a given unit enum value.';
+
+COMMENT ON FUNCTION convert_amount_safe(NUMERIC, public.unit, public.unit) IS
+  'Safely converts an amount from one unit to another using manual conversion factors.
+  Returns NULL if units are incompatible (different measurement types).
+  Handles count and preparation units by returning the original amount.
+  Uses g as base unit for mass, ml as base unit for volume.';
+
 COMMENT ON FUNCTION recalculate_parent_amounts_on_yield_change() IS 
   'Recalculates parent recipe component amounts when a preparation''s yield unit measurement type changes. 
-  Now properly converts component amounts to yield units before calculating ratios using postgresql-unit extension.
+  Now properly converts component amounts to yield units before calculating ratios using manual conversion helpers.
   Example: 1000g component with 1kg yield correctly calculates ratio as 1.0, not 1000.0';
-
-COMMENT ON FUNCTION convert_amount_safe(NUMERIC, TEXT, TEXT) IS
-  'Safely converts an amount from one unit to another using postgresql-unit extension.
-  Returns NULL if units are incompatible (different measurement types).
-  Handles count units specially by returning the original amount.';
