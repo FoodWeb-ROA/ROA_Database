@@ -32,9 +32,9 @@ BEGIN
     AND k.type = 'Personal'
   LIMIT 1;
 
-  -- Delete the personal kitchen (this will cascade to all related data)
+  -- Delete the personal kitchen first (this will cascade to all kitchen-related data)
   -- The CASCADE constraints will handle:
-  -- - kitchen_users entries
+  -- - kitchen_users entries for this kitchen
   -- - kitchen_invites
   -- - categories
   -- - recipes (dishes and preparations)
@@ -45,16 +45,11 @@ BEGIN
     DELETE FROM public.kitchen WHERE kitchen_id = v_personal_kitchen_id;
   END IF;
 
-  -- Remove user from any team kitchens
-  -- This won't delete the team kitchens, just the user's membership
-  DELETE FROM public.kitchen_users WHERE user_id = v_user_id;
-
-  -- Delete the user's public profile
-  -- This has ON DELETE CASCADE to auth.users
-  DELETE FROM public.users WHERE user_id = v_user_id;
-
-  -- Finally, delete the auth user
-  -- This is the critical step that removes the user from auth.users
+  -- Delete the auth user
+  -- This MUST come before deleting public.users because public.users has a FK to auth.users
+  -- The CASCADE constraint on kitchen_users will automatically remove team kitchen memberships
+  -- The CASCADE constraint on public.users will automatically remove the public profile
+  RAISE NOTICE 'Deleting auth user: %', v_user_id;
   DELETE FROM auth.users WHERE id = v_user_id;
 
   RAISE NOTICE 'User deletion completed for user_id: %', v_user_id;
