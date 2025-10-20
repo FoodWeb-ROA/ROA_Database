@@ -130,9 +130,5 @@ CREATE TRIGGER sync_user_data_to_public
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_auth_user_updates();
 
--- Add comments on triggers
-COMMENT ON TRIGGER on_auth_user_created ON auth.users IS 
-'Automatically creates a public.users record and personal kitchen when a new user signs up.';
-
-COMMENT ON TRIGGER sync_user_data_to_public ON auth.users IS 
-'Syncs changes from auth.users to public.users and updates personal kitchen names on email change.';
+-- Note: Cannot add comments on triggers in auth schema due to ownership restrictions
+-- Trigger descriptions are documented in the function comments instead
