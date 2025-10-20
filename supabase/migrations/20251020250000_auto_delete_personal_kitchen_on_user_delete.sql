@@ -109,3 +109,4 @@ COMMENT ON FUNCTION public.delete_user() IS
 '2. Team kitchen membership removal (via FK cascade) '
 '3. Public user profile deletion (via FK cascade). '
 'Must be called by an authenticated user to delete their own account.';
+
