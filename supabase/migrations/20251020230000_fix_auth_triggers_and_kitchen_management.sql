@@ -114,21 +114,31 @@ COMMENT ON FUNCTION public.handle_new_user() IS
 -- 4. Ensure triggers are properly attached to auth.users
 -- ============================================================================
 
--- Drop existing triggers if they exist (to ensure clean state)
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-DROP TRIGGER IF EXISTS sync_user_data_to_public ON auth.users;
+-- Create trigger for new user creation (will fail silently if exists)
+DO $$
+BEGIN
+  CREATE OR REPLACE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW
+    EXECUTE FUNCTION public.handle_new_user();
+EXCEPTION
+  WHEN duplicate_object THEN
+    RAISE NOTICE 'Trigger on_auth_user_created already exists, skipping';
+END
+$$;
 
--- Create trigger for new user creation
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_new_user();
-
--- Create trigger for user updates (email or metadata changes)
-CREATE TRIGGER sync_user_data_to_public
-  AFTER UPDATE OF raw_user_meta_data, email ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_auth_user_updates();
+-- Create trigger for user updates (will fail silently if exists)
+DO $$
+BEGIN
+  CREATE OR REPLACE TRIGGER sync_user_data_to_public
+    AFTER UPDATE OF raw_user_meta_data, email ON auth.users
+    FOR EACH ROW
+    EXECUTE FUNCTION public.handle_auth_user_updates();
+EXCEPTION
+  WHEN duplicate_object THEN
+    RAISE NOTICE 'Trigger sync_user_data_to_public already exists, skipping';
+END
+$$;
 
 -- Note: Cannot add comments on triggers in auth schema due to ownership restrictions
 -- Trigger descriptions are documented in the function comments instead
