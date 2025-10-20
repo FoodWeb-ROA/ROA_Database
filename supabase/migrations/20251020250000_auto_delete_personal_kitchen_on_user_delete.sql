@@ -13,25 +13,25 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-DECLARE
-  v_personal_kitchen_id uuid;
 BEGIN
-  -- Find the user's personal kitchen
-  SELECT k.kitchen_id INTO v_personal_kitchen_id
-  FROM public.kitchen k
-  INNER JOIN public.kitchen_users ku ON k.kitchen_id = ku.kitchen_id
-  WHERE ku.user_id = OLD.id
-    AND k.type = 'Personal'
-  LIMIT 1;
-
-  -- Delete the personal kitchen (this will cascade to all kitchen-related data)
-  IF v_personal_kitchen_id IS NOT NULL THEN
-    RAISE NOTICE 'Auto-deleting personal kitchen % for user %', v_personal_kitchen_id, OLD.id;
-    DELETE FROM public.kitchen WHERE kitchen_id = v_personal_kitchen_id;
-  END IF;
+  -- Delete the user's personal kitchen by name (always equals user's email)
+  -- Personal kitchens are kept in sync with user email via handle_auth_user_updates trigger
+  DELETE FROM public.kitchen 
+  WHERE name = OLD.email 
+    AND type = 'Personal';
+  
+  -- This cascades to all kitchen-related data:
+  -- - kitchen_users (removes kitchen membership)
+  -- - kitchen_invites
+  -- - categories
+  -- - recipes (dishes and preparations)
+  -- - components
+  -- - recipe_components
   
   -- The CASCADE constraint on public.users will automatically remove the public profile
   -- The CASCADE constraint on kitchen_users will automatically remove team kitchen memberships
+  
+  RAISE NOTICE 'Auto-deleted personal kitchen for user % (email: %)', OLD.id, OLD.email;
   
   RETURN OLD;
 END;
