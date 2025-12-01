@@ -38,8 +38,7 @@ CREATE TABLE public.kitchen_subscriptions (
   canceled_at timestamptz,
 
   -- Metadata
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Indexes for common queries
@@ -49,12 +48,6 @@ CREATE INDEX idx_kitchen_subscriptions_stripe_customer
   ON public.kitchen_subscriptions(stripe_customer_id);
 CREATE INDEX idx_kitchen_subscriptions_current_period_end 
   ON public.kitchen_subscriptions(current_period_end);
-
--- Auto-update updated_at
-CREATE TRIGGER set_updated_at_kitchen_subscriptions
-  BEFORE UPDATE ON public.kitchen_subscriptions
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_times();
 
 -- Helper function: check if a kitchen has an active subscription
 CREATE OR REPLACE FUNCTION public.is_kitchen_subscribed(p_kitchen_id uuid)
