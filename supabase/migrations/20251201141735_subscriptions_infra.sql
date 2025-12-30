@@ -16,7 +16,10 @@
 -- Note: stripe schema and its tables are created by the Stripe Sync Engine
 -- integration installed via Supabase Dashboard
 CREATE EXTENSION IF NOT EXISTS wrappers WITH SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS pgmq WITH SCHEMA extensions;
+
+-- pgmq must be installed in its own 'pgmq' schema (required by the extension)
+CREATE SCHEMA IF NOT EXISTS pgmq;
+CREATE EXTENSION IF NOT EXISTS pgmq WITH SCHEMA pgmq;
 
 -- =============================================================================
 -- Linking Table: Connect Stripe Customers to ROA Users/Kitchens
