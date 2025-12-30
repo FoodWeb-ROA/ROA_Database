@@ -32,7 +32,7 @@ CREATE TABLE public.stripe_customer_links (
   
   -- Link to our internal user (the paying user)
   user_id uuid NOT NULL
-    REFERENCES public.users(uuid)
+    REFERENCES public.users(user_id)
     ON DELETE CASCADE,
   
   -- Link to the Team kitchen this customer's subscription grants access to
@@ -151,9 +151,9 @@ DECLARE
   v_user_email text;
 BEGIN
   -- Get user email for default team name
-  SELECT email INTO v_user_email
+  SELECT user_email INTO v_user_email
   FROM public.users
-  WHERE uuid = p_user_id;
+  WHERE user_id = p_user_id;
   
   v_final_team_name := COALESCE(p_team_name, v_user_email, 'Team');
   
