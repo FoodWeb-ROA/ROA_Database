@@ -1,30 +1,84 @@
 -- =============================================================================
 -- Kitchen Subscriptions Infrastructure
 -- =============================================================================
--- Uses Stripe Sync Engine (stripe schema) + FDW for Stripe data
--- This migration creates linking tables and views to connect ROA entities
--- (kitchens, users) with the stripe schema managed by Stripe Sync Engine.
+-- Uses Stripe FDW (Foreign Data Wrapper) to query Stripe data directly via SQL.
+-- Foreign tables in the `stripe` schema connect to Stripe API in real-time.
 --
--- Prerequisites (installed via Supabase Dashboard):
--- 1. Stripe Sync Engine integration (creates stripe schema with customers,
---    subscriptions, prices, products tables)
--- 2. Enable wrappers extension (for stripe_fdw if needed)
--- 3. Enable pgmq extension (used by Sync Engine for queued syncs)
+-- Prerequisites:
+-- 1. Store your Stripe API key in Supabase Vault:
+--    SELECT vault.create_secret('sk_live_xxx', 'stripe_secret_key', 'Stripe API key');
 -- =============================================================================
 
 -- Enable required extensions
--- Note: stripe schema and its tables are created by the Stripe Sync Engine
--- integration installed via Supabase Dashboard
 CREATE EXTENSION IF NOT EXISTS wrappers WITH SCHEMA extensions;
 
--- pgmq must be installed in its own 'pgmq' schema (required by the extension)
-CREATE SCHEMA IF NOT EXISTS pgmq;
-CREATE EXTENSION IF NOT EXISTS pgmq WITH SCHEMA pgmq;
+-- =============================================================================
+-- Stripe Schema and FDW Setup
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS stripe;
+
+-- Create foreign data wrapper server for Stripe
+-- The API key is stored in Supabase Vault for security
+CREATE SERVER IF NOT EXISTS stripe_server
+  FOREIGN DATA WRAPPER stripe_wrapper
+  OPTIONS (
+    api_key_id 'stripe_secret_key'  -- References vault secret
+  );
+
+-- =============================================================================
+-- Foreign Tables: Real-time access to Stripe data
+-- =============================================================================
+
+-- Customers foreign table
+CREATE FOREIGN TABLE IF NOT EXISTS stripe.customers (
+  id text,
+  email text,
+  name text,
+  description text,
+  created timestamp,
+  attrs jsonb
+)
+SERVER stripe_server
+OPTIONS (
+  object 'customers',
+  rowid_column 'id'
+);
+
+-- Subscriptions foreign table  
+CREATE FOREIGN TABLE IF NOT EXISTS stripe.subscriptions (
+  id text,
+  customer text,
+  currency text,
+  current_period_start timestamp,
+  current_period_end timestamp,
+  created timestamp,
+  attrs jsonb
+)
+SERVER stripe_server
+OPTIONS (
+  object 'subscriptions',
+  rowid_column 'id'
+);
+
+-- Products foreign table
+CREATE FOREIGN TABLE IF NOT EXISTS stripe.products (
+  id text,
+  name text,
+  active boolean,
+  description text,
+  created timestamp,
+  attrs jsonb
+)
+SERVER stripe_server
+OPTIONS (
+  object 'products',
+  rowid_column 'id'
+);
 
 -- =============================================================================
 -- Linking Table: Connect Stripe Customers to ROA Users/Kitchens
 -- =============================================================================
--- The stripe.customers table is managed by Sync Engine.
 -- This table links Stripe customer IDs to our internal entities.
 
 CREATE TABLE public.stripe_customer_links (
@@ -41,7 +95,7 @@ CREATE TABLE public.stripe_customer_links (
     REFERENCES public.kitchen(kitchen_id)
     ON DELETE CASCADE,
   
-  -- Reference to stripe.customers.id (managed by Sync Engine)
+  -- Reference to Stripe customer ID
   stripe_customer_id text NOT NULL UNIQUE,
   
   -- Team name specified during checkout (for kitchen creation)
@@ -74,8 +128,8 @@ CREATE TRIGGER stripe_customer_links_updated_at
 -- =============================================================================
 -- View: Kitchen Subscription Status
 -- =============================================================================
--- Joins our linking table with stripe.subscriptions for a unified view.
--- This replaces the old kitchen_subscriptions table.
+-- Joins our linking table with stripe.subscriptions (FDW) for a unified view.
+-- NOTE: This view queries Stripe API on each access.
 
 CREATE OR REPLACE VIEW public.kitchen_subscription_status AS
 SELECT 
@@ -84,15 +138,15 @@ SELECT
   scl.stripe_customer_id,
   scl.team_name,
   s.id AS stripe_subscription_id,
-  s.status,
+  s.attrs->>'status' AS status,
   s.current_period_start,
   s.current_period_end,
-  s.cancel_at_period_end,
-  s.canceled_at,
+  (s.attrs->>'cancel_at_period_end')::boolean AS cancel_at_period_end,
+  (s.attrs->>'canceled_at')::timestamp AS canceled_at,
   s.created AS subscription_created_at,
   -- Derived fields
   CASE 
-    WHEN s.status IN ('trialing', 'active') 
+    WHEN s.attrs->>'status' IN ('trialing', 'active') 
       AND (s.current_period_end IS NULL OR s.current_period_end > now())
     THEN true
     ELSE false
@@ -107,7 +161,8 @@ GRANT SELECT ON public.kitchen_subscription_status TO authenticated;
 -- =============================================================================
 -- Helper Function: Check if kitchen has active subscription
 -- =============================================================================
--- Queries the stripe.subscriptions table via our linking table
+-- Queries the stripe.subscriptions foreign table via our linking table
+-- NOTE: Each call queries Stripe API
 
 CREATE OR REPLACE FUNCTION public.is_kitchen_subscribed(p_kitchen_id uuid)
 RETURNS boolean
@@ -121,7 +176,7 @@ AS $$
     FROM public.stripe_customer_links scl
     JOIN stripe.subscriptions s ON s.customer = scl.stripe_customer_id
     WHERE scl.kitchen_id = p_kitchen_id
-      AND s.status IN ('trialing', 'active')
+      AND s.attrs->>'status' IN ('trialing', 'active')
       AND (s.current_period_end IS NULL OR s.current_period_end > now())
   );
 $$;
@@ -222,13 +277,13 @@ CREATE POLICY "Users can view customer links for their kitchens"
 -- =============================================================================
 
 COMMENT ON TABLE public.stripe_customer_links IS 
-  'Links Stripe customers (from stripe.subscriptions via Sync Engine) to ROA users and kitchens. One subscription per kitchen enforced via UNIQUE constraint on kitchen_id.';
+  'Links Stripe customers to ROA users and kitchens. One subscription per kitchen enforced via UNIQUE constraint on kitchen_id.';
 
 COMMENT ON VIEW public.kitchen_subscription_status IS 
-  'Unified view joining stripe_customer_links with stripe.subscriptions for easy querying of kitchen subscription status.';
+  'Unified view joining stripe_customer_links with stripe.subscriptions (FDW). Each query hits Stripe API.';
 
 COMMENT ON FUNCTION public.is_kitchen_subscribed IS 
-  'Returns true if kitchen has active/trialing subscription with valid period. Queries stripe.subscriptions via linking table.';
+  'Returns true if kitchen has active/trialing subscription. Queries Stripe API via FDW.';
 
 COMMENT ON FUNCTION public.handle_subscription_checkout_complete IS 
   'Creates Team kitchen and links paying user as admin when Stripe checkout completes. Called by Edge Function. Returns kitchen_id.';
