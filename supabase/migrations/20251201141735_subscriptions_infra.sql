@@ -160,6 +160,7 @@ SELECT
 FROM public.stripe_customer_links scl
 LEFT JOIN stripe.subscriptions s 
   ON s.customer = scl.stripe_customer_id;
+SECURITY INVOKER;
 
 -- Grant access to the view
 GRANT SELECT ON public.kitchen_subscription_status TO authenticated;
