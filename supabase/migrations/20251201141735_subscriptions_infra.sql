@@ -25,11 +25,11 @@ CREATE FOREIGN DATA WRAPPER stripe_wrapper
 
 -- Create foreign data wrapper server for Stripe
 -- The API key is stored in Supabase Vault for security
--- First, store your API key: SELECT vault.create_secret('sk_xxx', 'stripe_secrey_key', 'Stripe API key');
+-- First, store your API key: SELECT vault.create_secret('sk_xxx', 'stripe_secret_key', 'Stripe API key');
 CREATE SERVER IF NOT EXISTS stripe_server
   FOREIGN DATA WRAPPER stripe_wrapper
   OPTIONS (
-    api_key_id 'stripe_secret_key'  -- References vault secret named 'stripe'
+    api_key_id 'stripe_secret_key'  -- References vault secret named 'stripe_secret_key'
   );
 
 -- =============================================================================
