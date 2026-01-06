@@ -220,6 +220,76 @@ CREATE TYPE "stripe"."subscription_status" AS ENUM (
 ALTER TYPE "stripe"."subscription_status" OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."auto_delete_expired_kitchens"() RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_kitchen_record RECORD;
+  v_deleted_count int := 0;
+BEGIN
+  RAISE NOTICE 'Starting auto-deletion check for expired kitchens';
+
+  -- Find all kitchens scheduled for deletion that have passed their deletion date
+  FOR v_kitchen_record IN
+    SELECT kitchen_id, name, deletion_scheduled_at
+    FROM public.kitchen
+    WHERE deletion_scheduled_at IS NOT NULL
+      AND deletion_scheduled_at <= now()
+      AND type = 'Team'
+  LOOP
+    BEGIN
+      RAISE NOTICE 'Auto-deleting kitchen: % (%) - scheduled for %', 
+        v_kitchen_record.kitchen_id, 
+        v_kitchen_record.name, 
+        v_kitchen_record.deletion_scheduled_at;
+
+      -- Delete the kitchen (CASCADE handles related data)
+      DELETE FROM public.kitchen WHERE kitchen_id = v_kitchen_record.kitchen_id;
+
+      v_deleted_count := v_deleted_count + 1;
+
+      RAISE NOTICE 'Successfully deleted kitchen: %', v_kitchen_record.kitchen_id;
+
+    EXCEPTION WHEN OTHERS THEN
+      RAISE WARNING 'Failed to delete kitchen %: %', v_kitchen_record.kitchen_id, SQLERRM;
+      -- Continue with next kitchen even if one fails
+    END;
+  END LOOP;
+
+  RAISE NOTICE 'Auto-deletion check completed. Deleted % kitchens', v_deleted_count;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."auto_delete_expired_kitchens"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."auto_delete_expired_kitchens"() IS 'Cron job function that runs daily to automatically delete kitchens that have passed their scheduled deletion date.';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+BEGIN
+  UPDATE public.kitchen
+  SET deletion_scheduled_at = NULL
+  WHERE kitchen_id = p_kitchen_id;
+
+  RAISE NOTICE 'Cleared deletion schedule for kitchen %', p_kitchen_id;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") IS 'Clears scheduled deletion when subscription is renewed.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."components_enforce_recipe_pairing"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -589,27 +659,86 @@ $$;
 ALTER FUNCTION "public"."delete_recipe"("_recipe_id" "uuid", "_kitchen_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_kitchen_type public."KitchenType";
+  v_owner_id uuid;
+  v_current_user_id uuid;
+BEGIN
+  v_current_user_id := auth.uid();
+  
+  IF v_current_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  -- Get kitchen type and owner
+  SELECT type, owner_user_id INTO v_kitchen_type, v_owner_id
+  FROM public.kitchen
+  WHERE kitchen_id = p_kitchen_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Kitchen not found';
+  END IF;
+
+  -- Only Team kitchens can be deleted this way (Personal kitchens deleted via user deletion)
+  IF v_kitchen_type != 'Team' THEN
+    RAISE EXCEPTION 'Can only delete Team kitchens using this function';
+  END IF;
+
+  -- Only owner can delete
+  IF v_owner_id != v_current_user_id THEN
+    RAISE EXCEPTION 'Only the kitchen owner can delete the kitchen';
+  END IF;
+
+  RAISE NOTICE 'Deleting team kitchen: %', p_kitchen_id;
+
+  -- Delete the kitchen (CASCADE will handle related data)
+  -- This includes: kitchen_users, recipes, components, recipe_components, kitchen_invites, stripe_customer_links
+  DELETE FROM public.kitchen WHERE kitchen_id = p_kitchen_id;
+
+  RAISE NOTICE 'Kitchen deletion completed: %', p_kitchen_id;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") IS 'Allows kitchen owner to immediately delete their team kitchen. Cascades to all related data (recipes, components, memberships, etc.).';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."delete_user"() RETURNS "void"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
     AS $$
 DECLARE
   v_user_id uuid;
+  v_owned_team_kitchens_count int;
 BEGIN
-  -- Get the authenticated user's ID
+  -- Get current user ID
   v_user_id := auth.uid();
   
   IF v_user_id IS NULL THEN
-    RAISE EXCEPTION 'Not authenticated';
+    RAISE EXCEPTION 'User not authenticated';
   END IF;
 
-  -- Log the deletion attempt
-  RAISE NOTICE 'User deletion initiated for user_id: %', v_user_id;
+  -- Check if user owns any team kitchens
+  SELECT COUNT(*) INTO v_owned_team_kitchens_count
+  FROM public.kitchen
+  WHERE owner_user_id = v_user_id
+    AND type = 'Team'; -- Only count team kitchens, not personal
 
-  -- Delete the auth user
-  -- The BEFORE DELETE trigger (on_auth_user_deleted) will automatically:
-  -- 1. Delete the personal kitchen (cascades to all recipes/components)
-  -- The CASCADE constraints will then automatically:
+  IF v_owned_team_kitchens_count > 0 THEN
+    RAISE EXCEPTION 'Cannot delete account while you own % team kitchen(s). Please transfer ownership or delete the kitchen(s) first.', v_owned_team_kitchens_count;
+  END IF;
+
+  -- Original deletion logic:
+  -- The trigger on_auth_user_deleted handles:
+  -- 1. Delete personal kitchen (handle_deleted_user)
   -- 2. Remove team kitchen memberships (kitchen_users FK cascade)
   -- 3. Remove public.users profile (users FK cascade)
   RAISE NOTICE 'Deleting auth user: %', v_user_id;
@@ -621,6 +750,10 @@ $$;
 
 
 ALTER FUNCTION "public"."delete_user"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."delete_user"() IS 'Deletes the current user account. Blocks deletion if user owns any team kitchens - they must transfer ownership first. Personal kitchens are automatically deleted via trigger.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_one_user_per_personal_kitchen"() RETURNS "trigger"
@@ -648,6 +781,39 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_one_user_per_personal_kitchen"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."enforce_owner_is_admin"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_owner_id uuid;
+BEGIN
+  -- Get the kitchen owner
+  SELECT owner_user_id INTO v_owner_id
+  FROM public.kitchen
+  WHERE kitchen_id = NEW.kitchen_id;
+
+  -- If this user is the owner, ensure is_admin is true
+  IF NEW.user_id = v_owner_id THEN
+    IF NEW.is_admin = false THEN
+      RAISE EXCEPTION 'Cannot revoke admin status from kitchen owner';
+    END IF;
+    -- Force is_admin to true for owners
+    NEW.is_admin := true;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."enforce_owner_is_admin"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."enforce_owner_is_admin"() IS 'Trigger function that prevents revoking admin status from kitchen owners';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."enforce_prep_name_kitchen_match_from_components"() RETURNS "trigger"
@@ -740,6 +906,32 @@ $$;
 
 
 ALTER FUNCTION "public"."enforce_prep_name_kitchen_match_from_recipes"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."ensure_new_owner_is_admin"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+BEGIN
+  -- When owner changes, ensure the new owner has is_admin=true
+  IF NEW.owner_user_id IS DISTINCT FROM OLD.owner_user_id THEN
+    -- Update the new owner to be admin
+    UPDATE public.kitchen_users
+    SET is_admin = true
+    WHERE kitchen_id = NEW.kitchen_id
+      AND user_id = NEW.owner_user_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."ensure_new_owner_is_admin"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."ensure_new_owner_is_admin"() IS 'Trigger function that ensures new kitchen owners automatically get admin status';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."find_by_fingerprints"("_fps" "uuid"[], "_kitchen" "uuid", "_only_preparations" boolean DEFAULT false) RETURNS TABLE("fingerprint" "uuid", "recipe_id" "uuid", "component_id" "uuid", "recipe_type" "public"."recipe_type")
@@ -1005,6 +1197,50 @@ $$;
 ALTER FUNCTION "public"."get_kitchen_preparations_for_parser"("p_kitchen_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") RETURNS TABLE("kitchen_id" "uuid", "paying_user_id" "uuid", "stripe_customer_id" "text", "team_name" "text", "stripe_subscription_id" "text", "status" "text", "current_period_start" timestamp with time zone, "current_period_end" timestamp with time zone, "cancel_at_period_end" boolean, "cancel_at" timestamp with time zone, "canceled_at" timestamp with time zone, "subscription_created_at" timestamp with time zone, "is_active" boolean, "is_canceling" boolean)
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'stripe'
+    AS $$
+    SELECT 
+        scl.kitchen_id,
+        scl.user_id AS paying_user_id,
+        scl.stripe_customer_id,
+        scl.team_name,
+        s.id AS stripe_subscription_id,
+        s.status,
+        to_timestamp((s.current_period_start)::double precision) AS current_period_start,
+        to_timestamp((s.current_period_end)::double precision) AS current_period_end,
+        s.cancel_at_period_end,
+        to_timestamp((s.cancel_at)::double precision) AS cancel_at,
+        to_timestamp((s.canceled_at)::double precision) AS canceled_at,
+        to_timestamp((s.created)::double precision) AS subscription_created_at,
+        -- is_active
+        CASE
+            WHEN s.status IN ('trialing', 'active') 
+                 AND (s.current_period_end IS NULL OR to_timestamp((s.current_period_end)::double precision) > now())
+            THEN true
+            ELSE false
+        END AS is_active,
+        -- is_canceling (check both fields)
+        CASE
+            WHEN s.cancel_at_period_end = true THEN true
+            WHEN s.cancel_at IS NOT NULL THEN true
+            ELSE false
+        END AS is_canceling
+    FROM public.stripe_customer_links scl
+    LEFT JOIN stripe.subscriptions s ON s.customer = scl.stripe_customer_id
+    WHERE scl.kitchen_id = p_kitchen_id
+    LIMIT 1;
+$$;
+
+
+ALTER FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") IS 'Returns subscription status for a kitchen. Checks both cancel_at_period_end and cancel_at for cancellation detection.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."get_unit_kind"("unit_val" "public"."unit") RETURNS "text"
     LANGUAGE "plpgsql" IMMUTABLE
     AS $$
@@ -1205,6 +1441,56 @@ COMMENT ON FUNCTION "public"."handle_subscription_checkout_complete"("p_stripe_c
 
 
 
+CREATE OR REPLACE FUNCTION "public"."handle_subscription_status_change"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_kitchen_id uuid;
+  v_old_status text;
+  v_new_status text;
+BEGIN
+  -- Get the status values
+  v_old_status := OLD.status;
+  v_new_status := NEW.status;
+  
+  -- Get the kitchen_id associated with this subscription
+  SELECT kitchen_id INTO v_kitchen_id
+  FROM public.stripe_customer_links
+  WHERE stripe_customer_id = NEW.customer
+  LIMIT 1;
+  
+  -- If no kitchen found, nothing to do
+  IF v_kitchen_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  
+  -- Check if subscription went from active/trialing to inactive
+  IF (v_old_status IN ('active', 'trialing') AND v_new_status NOT IN ('active', 'trialing')) THEN
+    -- Schedule deletion (30 days from now)
+    RAISE NOTICE 'Subscription became inactive for kitchen %. Scheduling deletion.', v_kitchen_id;
+    PERFORM public.schedule_kitchen_deletion(v_kitchen_id);
+  END IF;
+  
+  -- Check if subscription went from inactive to active/trialing (renewal)
+  IF (v_old_status NOT IN ('active', 'trialing') AND v_new_status IN ('active', 'trialing')) THEN
+    -- Clear deletion schedule
+    RAISE NOTICE 'Subscription reactivated for kitchen %. Clearing deletion schedule.', v_kitchen_id;
+    PERFORM public.clear_kitchen_deletion_schedule(v_kitchen_id);
+  END IF;
+  
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."handle_subscription_status_change"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."handle_subscription_status_change"() IS 'Trigger function that schedules kitchen deletion when subscription becomes inactive and clears it when reactivated.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."inventory_prep_consistency"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -1219,6 +1505,38 @@ END; $$;
 
 
 ALTER FUNCTION "public"."inventory_prep_consistency"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'stripe'
+    AS $$
+  SELECT 
+    -- Personal kitchens always have access (no subscription needed)
+    EXISTS (
+      SELECT 1 FROM public.kitchen k
+      WHERE k.kitchen_id = p_kitchen_id 
+        AND k.type = 'Personal'
+    )
+    OR
+    -- Team kitchens need active subscription
+    EXISTS (
+      SELECT 1
+      FROM public.stripe_customer_links scl
+      JOIN stripe.subscriptions s ON s.customer = scl.stripe_customer_id
+      WHERE scl.kitchen_id = p_kitchen_id
+        AND s.status IN ('trialing', 'active')
+        AND (s.current_period_end IS NULL OR to_timestamp(s.current_period_end) > now())
+    );
+$$;
+
+
+ALTER FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") IS 'Returns true if kitchen has valid access (Personal kitchen or active Team subscription).
+   Used for access control in RLS policies.';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") RETURNS boolean
@@ -1240,6 +1558,68 @@ ALTER FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") OWNER TO 
 
 
 COMMENT ON FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") IS 'Returns true if kitchen has active/trialing subscription. Queries local stripe.subscriptions table (synced by Stripe Sync Engine).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'stripe'
+    AS $$
+  SELECT 
+    -- Personal kitchens always allow writes
+    EXISTS (
+      SELECT 1 FROM public.kitchen k
+      WHERE k.kitchen_id = p_kitchen_id 
+        AND k.type = 'Personal'
+    )
+    OR
+    -- Team kitchens need active subscription for writes
+    EXISTS (
+      SELECT 1
+      FROM public.stripe_customer_links scl
+      JOIN stripe.subscriptions s ON s.customer = scl.stripe_customer_id
+      WHERE scl.kitchen_id = p_kitchen_id
+        AND s.status IN ('trialing', 'active')
+        AND (s.current_period_end IS NULL OR to_timestamp(s.current_period_end) > now())
+    );
+$$;
+
+
+ALTER FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") IS 'Returns true if kitchen allows write operations (Personal kitchen or active Team subscription).';
+
+
+
+CREATE OR REPLACE FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'stripe'
+    AS $$
+    SELECT 
+        COALESCE(
+            (
+                SELECT 
+                    CASE
+                        WHEN s.cancel_at_period_end = true THEN true
+                        WHEN s.cancel_at IS NOT NULL THEN true
+                        ELSE false
+                    END
+                FROM public.stripe_customer_links scl
+                JOIN stripe.subscriptions s ON s.customer = scl.stripe_customer_id
+                WHERE scl.kitchen_id = p_kitchen_id
+                  AND s.status IN ('trialing', 'active')
+                LIMIT 1
+            ),
+            false
+        );
+$$;
+
+
+ALTER FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") IS 'Returns true if the kitchen subscription is set to cancel (via cancel_at_period_end OR cancel_at).';
 
 
 
@@ -1799,6 +2179,33 @@ $$;
 ALTER FUNCTION "public"."replace_recipe_components"("_recipe_id" "uuid", "_kitchen_id" "uuid", "_items" "jsonb") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_deletion_date timestamptz;
+BEGIN
+  -- Schedule deletion 30 days from now
+  v_deletion_date := now() + interval '30 days';
+
+  UPDATE public.kitchen
+  SET deletion_scheduled_at = v_deletion_date
+  WHERE kitchen_id = p_kitchen_id
+    AND type = 'Team'; -- Only schedule deletion for Team kitchens
+
+  RAISE NOTICE 'Scheduled deletion for kitchen % at %', p_kitchen_id, v_deletion_date;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") IS 'Schedules a team kitchen for automatic deletion 30 days from now. Called when subscription ends.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."set_recipe_type"("p_recipe_id" "uuid", "p_new_type" "public"."recipe_type") RETURNS "void"
     LANGUAGE "plpgsql"
     SET "search_path" TO ''
@@ -2318,11 +2725,16 @@ CREATE TABLE IF NOT EXISTS "public"."kitchen" (
     "name" "text" DEFAULT 'new_kitchen'::"text" NOT NULL,
     "type" "public"."KitchenType" DEFAULT 'Personal'::"public"."KitchenType" NOT NULL,
     "owner_user_id" "uuid",
+    "deletion_scheduled_at" timestamp with time zone,
     CONSTRAINT "kitchen_owner_type_check" CHECK (((("type" = 'Team'::"public"."KitchenType") AND ("owner_user_id" IS NOT NULL)) OR (("type" = 'Personal'::"public"."KitchenType") AND ("owner_user_id" IS NULL))))
 );
 
 
 ALTER TABLE "public"."kitchen" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."kitchen"."deletion_scheduled_at" IS 'When this team kitchen is scheduled for automatic deletion (30 days after subscription ends). NULL means no deletion scheduled.';
+
 
 
 COMMENT ON CONSTRAINT "kitchen_owner_type_check" ON "public"."kitchen" IS 'Ensures Team kitchens have an owner and Personal kitchens do not';
@@ -2410,7 +2822,7 @@ ALTER TABLE "stripe"."subscriptions" OWNER TO "postgres";
 
 
 CREATE OR REPLACE VIEW "public"."kitchen_subscription_status" AS
- SELECT "scl"."kitchen_id",
+ SELECT DISTINCT ON ("scl"."kitchen_id") "scl"."kitchen_id",
     "scl"."user_id" AS "paying_user_id",
     "scl"."stripe_customer_id",
     "scl"."team_name",
@@ -2418,15 +2830,28 @@ CREATE OR REPLACE VIEW "public"."kitchen_subscription_status" AS
     "s"."status",
     "to_timestamp"(("s"."current_period_start")::double precision) AS "current_period_start",
     "to_timestamp"(("s"."current_period_end")::double precision) AS "current_period_end",
-    "s"."cancel_at_period_end",
-    "to_timestamp"(("s"."canceled_at")::double precision) AS "canceled_at",
-    "to_timestamp"(("s"."created")::double precision) AS "subscription_created_at",
         CASE
-            WHEN (("s"."status" = ANY (ARRAY['trialing'::"text", 'active'::"text"])) AND (("s"."current_period_end" IS NULL) OR ("to_timestamp"(("s"."current_period_end")::double precision) > "now"()))) THEN true
+            WHEN ("s"."status" = ANY (ARRAY['trialing'::"text", 'active'::"text"])) THEN true
             ELSE false
-        END AS "is_active"
-   FROM ("public"."stripe_customer_links" "scl"
-     LEFT JOIN "stripe"."subscriptions" "s" ON (("s"."customer" = "scl"."stripe_customer_id")));
+        END AS "is_active",
+    "s"."cancel_at_period_end",
+        CASE
+            WHEN (("s"."cancel_at_period_end" = true) OR ("s"."cancel_at" IS NOT NULL)) THEN true
+            ELSE false
+        END AS "is_canceling",
+        CASE
+            WHEN ("s"."cancel_at" IS NOT NULL) THEN "to_timestamp"(("s"."cancel_at")::double precision)
+            ELSE NULL::timestamp with time zone
+        END AS "cancel_at",
+    "k"."deletion_scheduled_at"
+   FROM (("public"."stripe_customer_links" "scl"
+     LEFT JOIN "stripe"."subscriptions" "s" ON (("scl"."stripe_customer_id" = "s"."customer")))
+     LEFT JOIN "public"."kitchen" "k" ON (("scl"."kitchen_id" = "k"."kitchen_id")))
+  ORDER BY "scl"."kitchen_id",
+        CASE
+            WHEN ("s"."status" = ANY (ARRAY['active'::"text", 'trialing'::"text"])) THEN 1
+            ELSE 2
+        END, "s"."created" DESC;
 
 
 ALTER VIEW "public"."kitchen_subscription_status" OWNER TO "postgres";
@@ -3521,6 +3946,11 @@ ALTER TABLE ONLY "stripe"."credit_notes"
 
 
 
+ALTER TABLE ONLY "stripe"."customers"
+    ADD CONSTRAINT "customers_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "stripe"."disputes"
     ADD CONSTRAINT "disputes_pkey" PRIMARY KEY ("id");
 
@@ -3591,6 +4021,11 @@ ALTER TABLE ONLY "stripe"."prices"
 
 
 
+ALTER TABLE ONLY "stripe"."products"
+    ADD CONSTRAINT "products_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "stripe"."refunds"
     ADD CONSTRAINT "refunds_pkey" PRIMARY KEY ("id");
 
@@ -3618,6 +4053,11 @@ ALTER TABLE ONLY "stripe"."subscription_items"
 
 ALTER TABLE ONLY "stripe"."subscription_schedules"
     ADD CONSTRAINT "subscription_schedules_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "stripe"."subscriptions"
+    ADD CONSTRAINT "subscriptions_pkey" PRIMARY KEY ("id");
 
 
 
@@ -3858,7 +4298,15 @@ CREATE INDEX "stripe_tax_ids_customer_idx" ON "stripe"."tax_ids" USING "btree" (
 
 
 
-CREATE OR REPLACE TRIGGER "kitchen-stripe-sync" AFTER DELETE OR UPDATE ON "public"."kitchen" FOR EACH ROW EXECUTE FUNCTION "supabase_functions"."http_request"('https://roa-api-prod-515418725737.us-central1.run.app/subscriptions/sync-kitchen-to-stripe', 'POST', '{"Content-type":"application/json","X-Supabase-Webhook-Secret":"roa-webhook-secret-130402"}', '{}', '5000');
+CREATE OR REPLACE TRIGGER "enforce_owner_is_admin_trigger" BEFORE INSERT OR UPDATE OF "is_admin" ON "public"."kitchen_users" FOR EACH ROW EXECUTE FUNCTION "public"."enforce_owner_is_admin"();
+
+
+
+CREATE OR REPLACE TRIGGER "ensure_new_owner_is_admin_trigger" AFTER UPDATE OF "owner_user_id" ON "public"."kitchen" FOR EACH ROW WHEN (("new"."owner_user_id" IS DISTINCT FROM "old"."owner_user_id")) EXECUTE FUNCTION "public"."ensure_new_owner_is_admin"();
+
+
+
+CREATE OR REPLACE TRIGGER "kitchen-stripe-sync" AFTER DELETE OR UPDATE ON "public"."kitchen" FOR EACH ROW EXECUTE FUNCTION "supabase_functions"."http_request"('https://roa-api-prod-515418725737.us-central1.run.app/subscriptions/sync-kitchen-to-stripe', 'POST', '{"Content-type":"application/json","X-Supabase-Signature":"roa-webhook-secret-130402"}', '{}', '5000');
 
 
 
@@ -4023,6 +4471,14 @@ CREATE OR REPLACE TRIGGER "handle_updated_at" BEFORE UPDATE ON "stripe"."subscri
 
 
 CREATE OR REPLACE TRIGGER "handle_updated_at" BEFORE UPDATE ON "stripe"."subscriptions" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "trigger_subscription_status_change" AFTER UPDATE OF "status" ON "stripe"."subscriptions" FOR EACH ROW WHEN (("old"."status" IS DISTINCT FROM "new"."status")) EXECUTE FUNCTION "public"."handle_subscription_status_change"();
+
+
+
+COMMENT ON TRIGGER "trigger_subscription_status_change" ON "stripe"."subscriptions" IS 'Automatically schedules kitchen deletion when subscription status changes to inactive, and clears schedule on reactivation.';
 
 
 
@@ -4292,6 +4748,36 @@ CREATE POLICY "Kitchen admins can view invites for their kitchens" ON "public"."
 
 
 
+CREATE POLICY "Only kitchen owner can remove users" ON "public"."kitchen_users" FOR DELETE USING ((EXISTS ( SELECT 1
+   FROM "public"."kitchen" "k"
+  WHERE (("k"."kitchen_id" = "kitchen_users"."kitchen_id") AND ("k"."owner_user_id" = "auth"."uid"())))));
+
+
+
+COMMENT ON POLICY "Only kitchen owner can remove users" ON "public"."kitchen_users" IS 'Restricts user removal to kitchen owners only';
+
+
+
+CREATE POLICY "Only kitchen owner can update admin status" ON "public"."kitchen_users" FOR UPDATE USING ((EXISTS ( SELECT 1
+   FROM "public"."kitchen" "k"
+  WHERE (("k"."kitchen_id" = "kitchen_users"."kitchen_id") AND ("k"."owner_user_id" = "auth"."uid"()))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."kitchen" "k"
+  WHERE (("k"."kitchen_id" = "kitchen_users"."kitchen_id") AND ("k"."owner_user_id" = "auth"."uid"())))));
+
+
+
+COMMENT ON POLICY "Only kitchen owner can update admin status" ON "public"."kitchen_users" IS 'Restricts admin privilege management to kitchen owners only';
+
+
+
+CREATE POLICY "Only kitchen owner can update kitchen" ON "public"."kitchen" FOR UPDATE USING (("owner_user_id" = "auth"."uid"())) WITH CHECK (("owner_user_id" = "auth"."uid"()));
+
+
+
+COMMENT ON POLICY "Only kitchen owner can update kitchen" ON "public"."kitchen" IS 'Restricts kitchen updates (including name changes) to owners only';
+
+
+
 CREATE POLICY "Parser service can read all recipe components" ON "public"."recipe_components" FOR SELECT TO "service_role" USING (true);
 
 
@@ -4313,15 +4799,11 @@ CREATE POLICY "Users can view their own customer links" ON "public"."stripe_cust
 ALTER TABLE "public"."categories" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "categories_delete" ON "public"."categories" FOR DELETE USING (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "categories"."kitchen_id"))))));
+CREATE POLICY "categories_delete" ON "public"."categories" FOR DELETE USING ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
-CREATE POLICY "categories_insert" ON "public"."categories" FOR INSERT WITH CHECK (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "categories"."kitchen_id"))))));
+CREATE POLICY "categories_insert" ON "public"."categories" FOR INSERT WITH CHECK ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
@@ -4331,26 +4813,18 @@ CREATE POLICY "categories_select" ON "public"."categories" FOR SELECT USING ((((
 
 
 
-CREATE POLICY "categories_update" ON "public"."categories" FOR UPDATE USING (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "categories"."kitchen_id")))))) WITH CHECK (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "categories"."kitchen_id"))))));
+CREATE POLICY "categories_update" ON "public"."categories" FOR UPDATE USING ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id"))) WITH CHECK ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
 ALTER TABLE "public"."components" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "components_delete" ON "public"."components" FOR DELETE TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "components"."kitchen_id"))))));
+CREATE POLICY "components_delete" ON "public"."components" FOR DELETE TO "authenticated" USING ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
-CREATE POLICY "components_insert" ON "public"."components" FOR INSERT TO "authenticated" WITH CHECK (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "components"."kitchen_id"))))));
+CREATE POLICY "components_insert" ON "public"."components" FOR INSERT TO "authenticated" WITH CHECK ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
@@ -4360,7 +4834,7 @@ CREATE POLICY "components_select" ON "public"."components" FOR SELECT TO "authen
 
 
 
-CREATE POLICY "components_update" ON "public"."components" FOR UPDATE TO "authenticated" USING ("public"."is_user_kitchen_member"(( SELECT "auth"."uid"() AS "uid"), "kitchen_id")) WITH CHECK ("public"."is_user_kitchen_member"(( SELECT "auth"."uid"() AS "uid"), "kitchen_id"));
+CREATE POLICY "components_update" ON "public"."components" FOR UPDATE TO "authenticated" USING ("public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id")) WITH CHECK (("public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
@@ -4382,13 +4856,13 @@ ALTER TABLE "public"."recipe_components" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "recipe_components_delete" ON "public"."recipe_components" FOR DELETE TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."recipes" "r"
-  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id")))));
+  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id") AND "public"."is_kitchen_write_allowed"("r"."kitchen_id")))));
 
 
 
 CREATE POLICY "recipe_components_insert" ON "public"."recipe_components" FOR INSERT TO "authenticated" WITH CHECK ((EXISTS ( SELECT 1
    FROM "public"."recipes" "r"
-  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id")))));
+  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id") AND "public"."is_kitchen_write_allowed"("r"."kitchen_id")))));
 
 
 
@@ -4402,22 +4876,18 @@ CREATE POLICY "recipe_components_update" ON "public"."recipe_components" FOR UPD
    FROM "public"."recipes" "r"
   WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id"))))) WITH CHECK ((EXISTS ( SELECT 1
    FROM "public"."recipes" "r"
-  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id")))));
+  WHERE (("r"."recipe_id" = "recipe_components"."recipe_id") AND "public"."is_user_kitchen_member"("auth"."uid"(), "r"."kitchen_id") AND "public"."is_kitchen_write_allowed"("r"."kitchen_id")))));
 
 
 
 ALTER TABLE "public"."recipes" ENABLE ROW LEVEL SECURITY;
 
 
-CREATE POLICY "recipes_delete" ON "public"."recipes" FOR DELETE TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "recipes"."kitchen_id"))))));
+CREATE POLICY "recipes_delete" ON "public"."recipes" FOR DELETE TO "authenticated" USING ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
-CREATE POLICY "recipes_insert" ON "public"."recipes" FOR INSERT TO "authenticated" WITH CHECK (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "recipes"."kitchen_id"))))));
+CREATE POLICY "recipes_insert" ON "public"."recipes" FOR INSERT TO "authenticated" WITH CHECK ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
@@ -4427,11 +4897,7 @@ CREATE POLICY "recipes_select" ON "public"."recipes" FOR SELECT TO "authenticate
 
 
 
-CREATE POLICY "recipes_update" ON "public"."recipes" FOR UPDATE TO "authenticated" USING (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "recipes"."kitchen_id")))))) WITH CHECK (((( SELECT "auth"."uid"() AS "uid") IS NOT NULL) AND (EXISTS ( SELECT 1
-   FROM "public"."kitchen_users" "ku"
-  WHERE (("ku"."user_id" = ( SELECT "auth"."uid"() AS "uid")) AND ("ku"."kitchen_id" = "recipes"."kitchen_id"))))));
+CREATE POLICY "recipes_update" ON "public"."recipes" FOR UPDATE TO "authenticated" USING ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id"))) WITH CHECK ((("auth"."uid"() IS NOT NULL) AND "public"."is_user_kitchen_member"("auth"."uid"(), "kitchen_id") AND "public"."is_kitchen_write_allowed"("kitchen_id")));
 
 
 
@@ -4446,8 +4912,6 @@ ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
 
 
-SET SESSION AUTHORIZATION "postgres";
-RESET SESSION AUTHORIZATION;
 
 
 
@@ -4983,6 +5447,18 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."auto_delete_expired_kitchens"() TO "anon";
+GRANT ALL ON FUNCTION "public"."auto_delete_expired_kitchens"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."auto_delete_expired_kitchens"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."clear_kitchen_deletion_schedule"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."components_enforce_recipe_pairing"() TO "anon";
 GRANT ALL ON FUNCTION "public"."components_enforce_recipe_pairing"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."components_enforce_recipe_pairing"() TO "service_role";
@@ -5025,6 +5501,12 @@ GRANT ALL ON FUNCTION "public"."delete_recipe"("_recipe_id" "uuid", "_kitchen_id
 
 
 
+GRANT ALL ON FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."delete_team_kitchen"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."delete_user"() TO "anon";
 GRANT ALL ON FUNCTION "public"."delete_user"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."delete_user"() TO "service_role";
@@ -5037,6 +5519,12 @@ GRANT ALL ON FUNCTION "public"."enforce_one_user_per_personal_kitchen"() TO "ser
 
 
 
+GRANT ALL ON FUNCTION "public"."enforce_owner_is_admin"() TO "anon";
+GRANT ALL ON FUNCTION "public"."enforce_owner_is_admin"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."enforce_owner_is_admin"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_components"() TO "anon";
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_components"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_components"() TO "service_role";
@@ -5046,6 +5534,12 @@ GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_components"
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_recipes"() TO "anon";
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_recipes"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."enforce_prep_name_kitchen_match_from_recipes"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."ensure_new_owner_is_admin"() TO "anon";
+GRANT ALL ON FUNCTION "public"."ensure_new_owner_is_admin"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."ensure_new_owner_is_admin"() TO "service_role";
 
 
 
@@ -5109,6 +5603,12 @@ GRANT ALL ON FUNCTION "public"."get_kitchen_preparations_for_parser"("p_kitchen_
 
 
 
+GRANT ALL ON FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_kitchen_subscription_status"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."get_unit_kind"("unit_val" "public"."unit") TO "anon";
 GRANT ALL ON FUNCTION "public"."get_unit_kind"("unit_val" "public"."unit") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_unit_kind"("unit_val" "public"."unit") TO "service_role";
@@ -5146,15 +5646,39 @@ GRANT ALL ON FUNCTION "public"."handle_subscription_checkout_complete"("p_stripe
 
 
 
+GRANT ALL ON FUNCTION "public"."handle_subscription_status_change"() TO "anon";
+GRANT ALL ON FUNCTION "public"."handle_subscription_status_change"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."handle_subscription_status_change"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."inventory_prep_consistency"() TO "anon";
 GRANT ALL ON FUNCTION "public"."inventory_prep_consistency"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."inventory_prep_consistency"() TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."is_kitchen_access_allowed"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") TO "anon";
 GRANT ALL ON FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."is_kitchen_subscribed"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."is_kitchen_write_allowed"("p_kitchen_id" "uuid") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."is_subscription_canceling"("p_kitchen_id" "uuid") TO "service_role";
 
 
 
@@ -5227,6 +5751,12 @@ GRANT ALL ON FUNCTION "public"."recipes_enforce_component_pairing"() TO "service
 GRANT ALL ON FUNCTION "public"."replace_recipe_components"("_recipe_id" "uuid", "_kitchen_id" "uuid", "_items" "jsonb") TO "anon";
 GRANT ALL ON FUNCTION "public"."replace_recipe_components"("_recipe_id" "uuid", "_kitchen_id" "uuid", "_items" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."replace_recipe_components"("_recipe_id" "uuid", "_kitchen_id" "uuid", "_items" "jsonb") TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."schedule_kitchen_deletion"("p_kitchen_id" "uuid") TO "service_role";
 
 
 
@@ -5341,13 +5871,9 @@ GRANT ALL ON FUNCTION "public"."verify_kitchen_owner_is_member"() TO "service_ro
 
 
 
-SET SESSION AUTHORIZATION "postgres";
-RESET SESSION AUTHORIZATION;
 
 
 
-SET SESSION AUTHORIZATION "postgres";
-RESET SESSION AUTHORIZATION;
 
 
 
@@ -5393,6 +5919,10 @@ GRANT ALL ON TABLE "public"."kitchen_invites" TO "service_role";
 GRANT ALL ON TABLE "public"."stripe_customer_links" TO "anon";
 GRANT ALL ON TABLE "public"."stripe_customer_links" TO "authenticated";
 GRANT ALL ON TABLE "public"."stripe_customer_links" TO "service_role";
+
+
+
+GRANT SELECT ON TABLE "stripe"."subscriptions" TO "authenticated";
 
 
 
