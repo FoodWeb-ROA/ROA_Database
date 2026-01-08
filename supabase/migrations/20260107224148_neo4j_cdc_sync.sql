@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.cdc_dedup (
   operation text
 );
 
+
 CREATE INDEX IF NOT EXISTS idx_cdc_dedup_processed_at 
   ON public.cdc_dedup(processed_at);
 
