@@ -228,7 +228,7 @@ and replaces all recipe_components in a single transaction.';
 -- DROP DEPRECATED FUNCTIONS
 -- ============================================================================
 
-DROP FUNCTION IF EXISTS public.replace_recipe_components(uuid, jsonb);
+DROP FUNCTION IF EXISTS public.replace_recipe_components(uuid, uuid, jsonb);
 DROP FUNCTION IF EXISTS public.upsert_preparation_components(uuid, uuid, jsonb);
-DROP FUNCTION IF EXISTS public.create_preparation_with_component(uuid, text, public.recipe_type, uuid, interval, text[], text, numeric, public.unit, text);
-DROP FUNCTION IF EXISTS public.overwrite_preparation_with_components(uuid, uuid, text, public.recipe_type, uuid, interval, text[], text, numeric, public.unit, text, jsonb);
+DROP FUNCTION IF EXISTS public.create_preparation_with_component(uuid, text, uuid, text[], interval, text, public.unit, numeric);
+DROP FUNCTION IF EXISTS public.overwrite_preparation_with_components(uuid, uuid, text, jsonb);
